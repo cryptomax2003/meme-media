@@ -22,7 +22,8 @@
                 codeExpiry: null,
                 view: 'home',
                 profileViewUser: null,
-                codeDisplayTimeout: null
+                codeDisplayTimeout: null,
+                expandedComments: new Set() // Track which posts have expanded comments
             },
 
             admins: ['cryptomax172003@gmail.com'],
@@ -92,7 +93,8 @@
                         following: [],
                         followers: [],
                         lastPostDate: null,
-                        postsToday: 0
+                        postsToday: 0,
+                        password: '' // Will be set on first login
                     });
                     this.saveData();
                 }
@@ -128,11 +130,13 @@
                 const createView = document.getElementById('createPostView');
                 const profileView = document.getElementById('profileView');
                 const searchView = document.getElementById('searchUserView');
+                const followersView = document.getElementById('followersView');
                 
                 if (homeView) homeView.classList.add('hidden');
                 if (createView) createView.classList.add('hidden');
                 if (profileView) profileView.classList.add('hidden');
                 if (searchView) searchView.classList.add('hidden');
+                if (followersView) followersView.classList.add('hidden');
 
                 if (viewName === 'home' && homeView) {
                     homeView.classList.remove('hidden');
@@ -145,6 +149,9 @@
                     this.renderProfile(param);
                 } else if (viewName === 'search' && searchView) {
                     searchView.classList.remove('hidden');
+                } else if (viewName === 'followers' && followersView) {
+                    followersView.classList.remove('hidden');
+                    this.renderFollowersList(param);
                 }
                 
                 window.scrollTo(0,0);
@@ -212,6 +219,21 @@
                 console.log('Filtering posts:', this.data.searchQuery);
                 this.renderPosts();
             },
+
+            toggleComments(postId) {
+                if (this.data.expandedComments.has(postId)) {
+                    this.data.expandedComments.delete(postId);
+                } else {
+                    this.data.expandedComments.add(postId);
+                }
+                this.renderPosts();
+            },
+
+            formatCommentText(text) {
+                // Replace @mentions with styled spans
+                return text.replace(/@(\w+)/g, '<span class="text-blue-400 font-bold hover:underline cursor-pointer">@$1</span>');
+            },
+
             renderPosts() {
                 console.log('Rendering posts...');
                 const container = document.getElementById('postsContainer');
@@ -267,15 +289,32 @@
                     const card = document.createElement('div');
                     card.className = 'glass-panel rounded-xl overflow-hidden border border-gray-800 hover:border-green-500/50 transition-all duration-300 flex flex-col';
                     
-                    const commentsHtml = post.comments && post.comments.length > 0 
-                        ? `<div class="mt-3 pt-3 border-t border-gray-700 space-y-2">
-                            ${post.comments.map(c => `
-                                <div class="text-xs text-gray-400">
-                                    <span class="text-green-400 font-bold">@${c.user}</span>: ${c.text}
-                                </div>
-                            `).join('')}
-                           </div>` 
-                        : '';
+                    // Handle comments display - show only first 3 unless expanded
+                    const allComments = post.comments || [];
+                    const isExpanded = this.data.expandedComments.has(post.id);
+                    const displayedComments = isExpanded ? allComments : allComments.slice(0, 3);
+                    const hasMoreComments = allComments.length > 3;
+                    
+                    let commentsHtml = '';
+                    if (allComments.length > 0) {
+                        const commentsList = displayedComments.map(c => `
+                            <div class="text-xs text-gray-400 mb-1">
+                                <span class="text-green-400 font-bold cursor-pointer hover:underline" onclick="window.app.navigate('profile', '${this.getUserEmailByTag(c.user)}')">@${c.user}</span>: 
+                                <span>${this.formatCommentText(c.text)}</span>
+                            </div>
+                        `).join('');
+                        
+                        const readMoreBtn = hasMoreComments ? `
+                            <button onclick="window.app.toggleComments(${post.id})" class="text-xs text-blue-400 hover:text-blue-300 mb-2 font-medium">
+                                ${isExpanded ? 'Read Less ↑' : `Read More (${allComments.length - 3} more) ↓`}
+                            </button>
+                        ` : '';
+                        
+                        commentsHtml = `<div class="mt-3 pt-3 border-t border-gray-700 space-y-1">
+                            ${readMoreBtn}
+                            ${commentsList}
+                        </div>`;
+                    }
                     
                     card.innerHTML = `
                         ${post.image ? `
@@ -322,6 +361,11 @@
                     `;
                     container.appendChild(card);
                 });
+            },
+
+            getUserEmailByTag(tag) {
+                const user = this.data.users.find(u => u.tag === tag);
+                return user ? user.email : '';
             },
 
             handleNewPostClick() {
@@ -496,7 +540,9 @@
                     this.showToast('Comment added!');
                 }
             },
+
             renderProfile(targetEmail) {
+                // Allow admin to view any profile, users can view any profile too
                 const email = targetEmail || (this.data.currentUser ? this.data.currentUser.email : null);
                 
                 if (!email) {
@@ -524,7 +570,10 @@
                 if (profileImage) profileImage.src = user.pic || `https://ui-avatars.com/api/?name=${user.tag}&background=10b981&color=fff`;
                 
                 if (emailDisplay) {
-                    if (this.data.currentUser && this.data.currentUser.email === email) {
+                    // Only show email to profile owner or admin
+                    const isOwner = this.data.currentUser && this.data.currentUser.email === email;
+                    const isAdmin = this.data.currentUser && this.admins.includes(this.data.currentUser.email);
+                    if (isOwner || isAdmin) {
                         emailDisplay.innerText = user.email;
                         emailDisplay.classList.remove('hidden');
                     } else {
@@ -534,10 +583,18 @@
                 
                 const userPosts = this.data.posts.filter(p => p.author === email);
                 if (profilePostsCount) profilePostsCount.innerText = userPosts.length;
-                if (profileFollowers) profileFollowers.innerText = user.followers ? user.followers.length : 0;
-                if (profileFollowing) profileFollowing.innerText = user.following ? user.following.length : 0;
+                
+                // Fix: Ensure followers/following arrays exist and count is correct
+                if (!user.followers) user.followers = [];
+                if (!user.following) user.following = [];
+                
+                if (profileFollowers) profileFollowers.innerText = user.followers.length;
+                if (profileFollowing) profileFollowing.innerText = user.following.length;
 
-                if (this.data.currentUser && this.data.currentUser.email === email) {
+                const isOwner = this.data.currentUser && this.data.currentUser.email === email;
+                const isAdmin = this.data.currentUser && this.admins.includes(this.data.currentUser.email);
+
+                if (isOwner) {
                     if (editSection) editSection.classList.remove('hidden');
                     if (followBtn) followBtn.classList.add('hidden');
                     const editTagInput = document.getElementById('editTagInput');
@@ -563,12 +620,67 @@
                         userPostsContainer.innerHTML = `<div class="col-span-full text-center text-gray-500">No posts yet.</div>`;
                     } else {
                         userPosts.forEach(post => {
+                            const isAdmin = this.admins.includes(post.author);
+                            const isAuthor = this.data.currentUser && this.data.currentUser.email === post.author;
+                            const canDelete = isAdmin || isAuthor;
+                            
+                            let userLikeStatus = 'none';
+                            if (this.data.currentUser) {
+                                if (post.likesList && post.likesList.includes(this.data.currentUser.email)) userLikeStatus = 'like';
+                                if (post.dislikesList && post.dislikesList.includes(this.data.currentUser.email)) userLikeStatus = 'dislike';
+                            }
+
+                            const allComments = post.comments || [];
+                            const isExpanded = this.data.expandedComments.has(post.id);
+                            const displayedComments = isExpanded ? allComments : allComments.slice(0, 3);
+                            const hasMoreComments = allComments.length > 3;
+                            
+                            let commentsHtml = '';
+                            if (allComments.length > 0) {
+                                const commentsList = displayedComments.map(c => `
+                                    <div class="text-xs text-gray-400 mb-1">
+                                        <span class="text-green-400 font-bold cursor-pointer hover:underline" onclick="window.app.navigate('profile', '${this.getUserEmailByTag(c.user)}')">@${c.user}</span>: 
+                                        <span>${this.formatCommentText(c.text)}</span>
+                                    </div>
+                                `).join('');
+                                
+                                const readMoreBtn = hasMoreComments ? `
+                                    <button onclick="window.app.toggleComments(${post.id})" class="text-xs text-blue-400 hover:text-blue-300 mb-2 font-medium">
+                                        ${isExpanded ? 'Read Less ↑' : `Read More (${allComments.length - 3} more) ↓`}
+                                    </button>
+                                ` : '';
+                                
+                                commentsHtml = `<div class="mt-3 pt-3 border-t border-gray-700 space-y-1">
+                                    ${readMoreBtn}
+                                    ${commentsList}
+                                </div>`;
+                            }
+
                             const div = document.createElement('div');
                             div.className = 'glass-panel p-4 rounded-lg border border-gray-800';
                             div.innerHTML = `
+                                ${post.image ? `<img src="${post.image}" class="w-full h-32 object-cover rounded mb-3" onerror="this.style.display='none'">` : ''}
                                 <h4 class="font-bold text-white mb-1">${post.title}</h4>
                                 <p class="text-xs text-gray-400 mb-2">${post.category} • ${new Date(post.timestamp).toLocaleDateString()}</p>
-                                <p class="text-sm text-gray-300 line-clamp-2">${post.content}</p>
+                                <p class="text-sm text-gray-300 line-clamp-2 mb-3">${post.content}</p>
+                                <div class="flex items-center justify-between pt-3 border-t border-gray-700">
+                                    <div class="flex gap-3">
+                                        <button onclick="window.app.handleVote(${post.id}, 'like')" class="flex items-center gap-1 text-xs ${userLikeStatus === 'like' ? 'text-green-400' : 'text-gray-500 hover:text-green-400'}">
+                                            <i class="fa-solid fa-arrow-up"></i> ${post.likes || 0}
+                                        </button>
+                                        <button onclick="window.app.handleVote(${post.id}, 'dislike')" class="flex items-center gap-1 text-xs ${userLikeStatus === 'dislike' ? 'text-red-400' : 'text-gray-500 hover:text-red-400'}">
+                                            <i class="fa-solid fa-arrow-down"></i> ${post.dislikes || 0}
+                                        </button>
+                                        <button onclick="window.app.showCommentModal(${post.id})" class="flex items-center gap-1 text-xs text-gray-500 hover:text-blue-400">
+                                            <i class="fa-solid fa-comment"></i> ${post.comments ? post.comments.length : 0}
+                                        </button>
+                                    </div>
+                                    ${canDelete ? `
+                                    <button onclick="window.app.deletePost(${post.id})" class="text-gray-600 hover:text-red-500 text-xs">
+                                        <i class="fa-solid fa-trash"></i>
+                                    </button>` : ''}
+                                </div>
+                                ${commentsHtml}
                             `;
                             userPostsContainer.appendChild(div);
                         });
@@ -591,6 +703,12 @@
                         this.showToast('User tag already taken', 'error');
                         return;
                     }
+                    // Update authorTag in all posts
+                    this.data.posts.forEach(post => {
+                        if (post.author === user.email) {
+                            post.authorTag = newTag;
+                        }
+                    });
                 }
 
                 user.tag = newTag;
@@ -626,6 +744,46 @@
                 this.renderProfile(targetEmail);
             },
 
+            showFollowersList(type, userEmail) {
+                this.navigate('followers', { type, userEmail });
+            },
+
+            renderFollowersList(param) {
+                const container = document.getElementById('followersListContainer');
+                const title = document.getElementById('followersListTitle');
+                
+                if (!container || !title || !param) return;
+                
+                const user = this.data.users.find(u => u.email === param.userEmail);
+                if (!user) return;
+                
+                const list = param.type === 'followers' ? (user.followers || []) : (user.following || []);
+                title.innerText = param.type === 'followers' ? 'Followers' : 'Following';
+                
+                if (list.length === 0) {
+                    container.innerHTML = `<div class="text-center text-gray-500 py-8">No ${param.type} yet</div>`;
+                    return;
+                }
+                
+                container.innerHTML = list.map(email => {
+                    const u = this.data.users.find(user => user.email === email);
+                    if (!u) return '';
+                    return `
+                        <div class="flex items-center justify-between p-3 bg-gray-800 rounded-lg mb-2">
+                            <div class="flex items-center gap-3 cursor-pointer" onclick="window.app.navigate('profile', '${u.email}')">
+                                <img src="${u.pic || `https://ui-avatars.com/api/?name=${u.tag}&background=10b981&color=fff`}" class="w-10 h-10 rounded-full">
+                                <div>
+                                    <div class="text-white font-bold">@${u.tag}</div>
+                                </div>
+                            </div>
+                            <button onclick="window.app.navigate('profile', '${u.email}')" class="px-4 py-1 bg-green-600 text-black rounded-full text-sm font-bold hover:bg-green-500">
+                                View
+                            </button>
+                        </div>
+                    `;
+                }).join('');
+            },
+
             searchUser() {
                 const searchInput = document.getElementById('userSearchInput');
                 const resultsContainer = document.getElementById('searchResults');
@@ -647,23 +805,22 @@
                     } else {
                         resultsContainer.innerHTML = matches.map(u => `
                             <div class="flex items-center justify-between p-3 bg-gray-800 rounded-lg mb-2">
-                                <div class="flex items-center gap-3">
+                                <div class="flex items-center gap-3 cursor-pointer" onclick="window.app.navigate('profile', '${u.email}')">
                                     <img src="${u.pic || `https://ui-avatars.com/api/?name=${u.tag}&background=10b981&color=fff`}" class="w-10 h-10 rounded-full">
                                     <div>
                                         <div class="text-white font-bold">@${u.tag}</div>
                                         ${this.data.currentUser && this.data.currentUser.email === u.email ? '<div class="text-xs text-green-400">You</div>' : ''}
                                     </div>
                                 </div>
-                                ${this.data.currentUser && this.data.currentUser.email !== u.email ? `
-                                    <button onclick="window.app.navigate('profile', '${u.email}')" class="px-4 py-1 bg-green-600 text-black rounded-full text-sm font-bold hover:bg-green-500">
-                                        View
-                                    </button>
-                                ` : ''}
+                                <button onclick="window.app.navigate('profile', '${u.email}')" class="px-4 py-1 bg-green-600 text-black rounded-full text-sm font-bold hover:bg-green-500">
+                                    View
+                                </button>
                             </div>
                         `).join('');
                     }
                 }
             },
+
             toggleAuthModal() {
                 console.log('Toggling auth modal');
                 const modal = document.getElementById('authModal');
@@ -789,8 +946,9 @@
                 }
 
                 if (this.data.authMode === 'register') {
+                    // Check if user already exists
                     if (this.data.users.some(u => u.email === email)) {
-                        this.showToast('Account already exists', 'error');
+                        this.showToast('Account already exists with this email', 'error');
                         return;
                     }
                     
@@ -801,18 +959,32 @@
                         following: [],
                         followers: [],
                         lastPostDate: null,
-                        postsToday: 0
+                        postsToday: 0,
+                        password: password // Store the registration password
                     };
                     this.data.users.push(newUser);
                     this.data.currentUser = newUser;
                     this.saveData();
                     this.showToast('Account created successfully!');
                 } else {
+                    // Login mode - verify password
                     const user = this.data.users.find(u => u.email === email);
                     if (!user) {
                         this.showToast('User not found', 'error');
                         return;
                     }
+                    
+                    // Verify password matches
+                    if (user.password && user.password !== password) {
+                        this.showToast('Incorrect password', 'error');
+                        return;
+                    }
+                    
+                    // If no password set (legacy user), set it now
+                    if (!user.password) {
+                        user.password = password;
+                    }
+                    
                     this.data.currentUser = user;
                     this.saveData();
                     this.showToast('Logged in successfully!');
@@ -969,6 +1141,11 @@
         @keyframes pulse {
             0%, 100% { transform: scale(1); }
             50% { transform: scale(1.05); }
+        }
+
+        .mention {
+            color: #60a5fa;
+            font-weight: bold;
         }
     </style>
 </head>
@@ -1132,15 +1309,15 @@
                         <p id="profileEmailDisplay" class="text-gray-500 text-sm mt-1 hidden"></p>
                     </div>
                     <div class="flex gap-4 text-center">
-                        <div>
+                        <div class="cursor-pointer hover:bg-gray-800 p-2 rounded-lg transition-colors" onclick="window.app.showFollowersList('posts', window.app.data.profileViewUser || (window.app.data.currentUser ? window.app.data.currentUser.email : ''))">
                             <div class="text-xl font-bold text-white" id="profilePostsCount">0</div>
                             <div class="text-xs text-gray-400 uppercase tracking-wider">Posts</div>
                         </div>
-                        <div>
+                        <div class="cursor-pointer hover:bg-gray-800 p-2 rounded-lg transition-colors" onclick="window.app.showFollowersList('followers', window.app.data.profileViewUser || (window.app.data.currentUser ? window.app.data.currentUser.email : ''))">
                             <div class="text-xl font-bold text-white" id="profileFollowers">0</div>
                             <div class="text-xs text-gray-400 uppercase tracking-wider">Followers</div>
                         </div>
-                        <div>
+                        <div class="cursor-pointer hover:bg-gray-800 p-2 rounded-lg transition-colors" onclick="window.app.showFollowersList('following', window.app.data.profileViewUser || (window.app.data.currentUser ? window.app.data.currentUser.email : ''))">
                             <div class="text-xl font-bold text-white" id="profileFollowing">0</div>
                             <div class="text-xs text-gray-400 uppercase tracking-wider">Following</div>
                         </div>
@@ -1174,6 +1351,21 @@
                     <i class="fa-solid fa-search absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-500"></i>
                 </div>
                 <div id="searchResults" class="space-y-2">
+                </div>
+            </div>
+        </div>
+
+        <div id="followersView" class="hidden max-w-2xl mx-auto">
+            <div class="glass-panel rounded-2xl p-8 border border-gray-700">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 id="followersListTitle" class="text-2xl font-bold text-white flex items-center gap-2">
+                        <i class="fa-solid fa-users text-green-400"></i> Followers
+                    </h2>
+                    <button onclick="window.app.navigate('profile', window.app.data.profileViewUser || (window.app.data.currentUser ? window.app.data.currentUser.email : ''))" class="text-gray-400 hover:text-white">
+                        <i class="fa-solid fa-times text-xl"></i>
+                    </button>
+                </div>
+                <div id="followersListContainer" class="space-y-2">
                 </div>
             </div>
         </div>
@@ -1240,7 +1432,7 @@
                     <h3 class="text-xl font-bold text-white">Add Comment</h3>
                     <button onclick="window.app.closeCommentModal()" class="text-gray-400 hover:text-white"><i class="fa-solid fa-times"></i></button>
                 </div>
-                <textarea id="commentInput" rows="4" placeholder="Write your comment..." class="w-full bg-black border border-gray-700 rounded-lg p-3 text-white focus:border-green-500 focus:outline-none mb-4"></textarea>
+                <textarea id="commentInput" rows="4" placeholder="Write your comment... Use @username to mention" class="w-full bg-black border border-gray-700 rounded-lg p-3 text-white focus:border-green-500 focus:outline-none mb-4"></textarea>
                 <div class="flex gap-3">
                     <button onclick="window.app.closeCommentModal()" class="flex-1 py-2 rounded-lg border border-gray-600 text-gray-300 hover:bg-gray-800 transition-colors">Cancel</button>
                     <button id="submitCommentBtn" class="flex-1 py-2 rounded-lg bg-green-600 text-black font-bold hover:bg-green-500 transition-colors">Post Comment</button>
