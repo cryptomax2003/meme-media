@@ -1,0 +1,1470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MEME MEDIA | The Future of Meme Finance</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    
+    <style>
+        .glass-panel {
+            background: rgba(20, 20, 20, 0.8);
+            backdrop-filter: blur(12px);
+        }
+        .category-pill.active {
+            background-color: #22c55e;
+            color: black;
+        }
+        .line-clamp-3 {
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .line-clamp-1 {
+            display: -webkit-box;
+            -webkit-line-clamp: 1;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        /* Loading animation */
+        .loading-pulse {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: .5; }
+        }
+    </style>
+    
+    <script>
+        // ==========================================
+        // FIREBASE CONFIGURATION
+        // ==========================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyDJUuShTLtA7vo2P67KX425ySL1lJ4Q_lo",
+            authDomain: "mememedia-832af.firebaseapp.com",
+            projectId: "mememedia-832af",
+            storageBucket: "mememedia-832af.firebasestorage.app",
+            messagingSenderId: "1014463566582",
+            appId: "1:1014463566582:web:65e563f4f0f787626852d7"
+        };
+        
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+        const auth = firebase.auth();
+        
+        // ==========================================
+        // MAIN APPLICATION
+        // ==========================================
+        window.app = {
+            data: {
+                currentUser: null,
+                users: [],
+                posts: [],
+                currentTab: 'all',
+                currentCategory: 'All',
+                searchQuery: '',
+                authMode: 'login',
+                view: 'home',
+                profileViewUser: null,
+                expandedComments: new Set(),
+                unsubscribePosts: null,
+                unsubscribeUsers: null,
+                isLoading: false
+            },
+
+            admins: ['cryptomax172003@gmail.com'],
+
+            async init() {
+                console.log('App initializing...');
+                this.setupEventListeners();
+                await this.checkAuth();
+                console.log('App initialized successfully');
+            },
+            // ==========================================
+            // REAL-TIME DATA SYNC WITH FIREBASE
+            // ==========================================
+            
+            setupRealtimeListeners() {
+                console.log('Setting up real-time listeners...');
+                
+                // Stop any existing listeners first
+                this.stopRealtimeListeners();
+
+                // Real-time posts listener with error handling
+                this.data.unsubscribePosts = db.collection('posts')
+                    .orderBy('timestamp', 'desc')
+                    .onSnapshot((snapshot) => {
+                        console.log('Real-time posts update received:', snapshot.docs.length, 'posts');
+                        
+                        const posts = [];
+                        snapshot.docChanges().forEach((change) => {
+                            const postData = { id: change.doc.id, ...change.doc.data() };
+                            
+                            if (change.type === 'added') {
+                                console.log('New post added:', postData.title);
+                            } else if (change.type === 'modified') {
+                                console.log('Post modified:', postData.title);
+                            } else if (change.type === 'removed') {
+                                console.log('Post removed:', change.doc.id);
+                            }
+                            
+                            posts.push(postData);
+                        });
+                        
+                        this.data.posts = posts;
+                        this.renderPosts();
+                    }, (error) => {
+                        console.error('Posts listener error:', error);
+                        this.showToast('Connection error. Retrying...', 'error');
+                    });
+
+                // Real-time users listener
+                this.data.unsubscribeUsers = db.collection('users')
+                    .onSnapshot((snapshot) => {
+                        console.log('Real-time users update received:', snapshot.docs.length, 'users');
+                        
+                        const users = [];
+                        snapshot.forEach((doc) => {
+                            users.push({ email: doc.id, ...doc.data() });
+                        });
+                        
+                        this.data.users = users;
+                        
+                        // Update current user data if it changed
+                        if (this.data.currentUser) {
+                            const updatedUser = users.find(u => u.email === this.data.currentUser.email);
+                            if (updatedUser) {
+                                this.data.currentUser = { ...this.data.currentUser, ...updatedUser };
+                            }
+                        }
+                        
+                        if (this.data.view === 'profile') {
+                            this.renderProfile(this.data.profileViewUser);
+                        }
+                    }, (error) => {
+                        console.error('Users listener error:', error);
+                    });
+            },
+
+            stopRealtimeListeners() {
+                console.log('Stopping real-time listeners...');
+                if (this.data.unsubscribePosts) {
+                    this.data.unsubscribePosts();
+                    this.data.unsubscribePosts = null;
+                }
+                if (this.data.unsubscribeUsers) {
+                    this.data.unsubscribeUsers();
+                    this.data.unsubscribeUsers = null;
+                }
+            },
+
+            // ==========================================
+            // AUTHENTICATION
+            // ==========================================
+            
+            async checkAuth() {
+                return new Promise((resolve) => {
+                    auth.onAuthStateChanged(async (user) => {
+                        if (user) {
+                            console.log('User authenticated:', user.email);
+                            
+                            // Get user data from Firestore
+                            try {
+                                const userDoc = await db.collection('users').doc(user.email).get();
+                                if (userDoc.exists) {
+                                    this.data.currentUser = { email: user.email, ...userDoc.data() };
+                                    this.setupRealtimeListeners();
+                                    this.showToast(`Welcome back, @${this.data.currentUser.tag || user.email.split('@')[0]}!`, 'success');
+                                } else {
+                                    console.warn('User document not found, creating...');
+                                    await this.createUserDocument(user.email);
+                                }
+                            } catch (error) {
+                                console.error('Error fetching user data:', error);
+                            }
+                        } else {
+                            console.log('No user authenticated');
+                            this.data.currentUser = null;
+                            this.stopRealtimeListeners();
+                            this.data.posts = [];
+                            this.data.users = [];
+                            this.renderPosts();
+                        }
+                        
+                        this.updateAuthUI();
+                        resolve();
+                    });
+                });
+            },
+
+            async createUserDocument(email) {
+                const tag = this.generateUserTag(email);
+                const userData = {
+                    email: email,
+                    tag: tag,
+                    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    followers: [],
+                    following: [],
+                    postsToday: 0,
+                    lastPostDate: null
+                };
+                
+                try {
+                    await db.collection('users').doc(email).set(userData);
+                    this.data.currentUser = { email: email, ...userData };
+                    this.setupRealtimeListeners();
+                    this.showToast('Welcome to MEME MEDIA!', 'success');
+                } catch (error) {
+                    console.error('Error creating user document:', error);
+                    this.showToast('Error creating profile', 'error');
+                }
+            },
+            // ==========================================
+            // NAVIGATION
+            // ==========================================
+            
+            navigate(viewName, param = null) {
+                console.log('Navigating to:', viewName);
+                this.data.view = viewName;
+                
+                // Hide all views first
+                const views = ['homeView', 'createPostView', 'profileView', 'searchUserView', 'followersView'];
+                views.forEach(v => {
+                    const el = document.getElementById(v);
+                    if (el) el.classList.add('hidden');
+                });
+
+                // Show target view
+                const viewMap = {
+                    'home': 'homeView',
+                    'create': 'createPostView',
+                    'profile': 'profileView',
+                    'search': 'searchUserView',
+                    'followers': 'followersView'
+                };
+
+                const targetView = document.getElementById(viewMap[viewName]);
+                if (targetView) {
+                    targetView.classList.remove('hidden');
+                }
+
+                // Route-specific setup
+                if (viewName === 'home') {
+                    this.renderPosts();
+                } else if (viewName === 'create') {
+                    this.setupCreatePost();
+                } else if (viewName === 'profile') {
+                    this.renderProfile(param);
+                } else if (viewName === 'followers') {
+                    this.renderFollowersList(param);
+                } else if (viewName === 'search') {
+                    this.setupSearchView();
+                }
+                
+                window.scrollTo(0, 0);
+            },
+
+            setupCreatePost() {
+                const postTypeSection = document.getElementById('postTypeSection');
+                if (postTypeSection) {
+                    if (this.data.currentUser && this.admins.includes(this.data.currentUser.email)) {
+                        postTypeSection.classList.remove('hidden');
+                    } else {
+                        postTypeSection.classList.add('hidden');
+                    }
+                }
+            },
+
+            setupSearchView() {
+                const searchInput = document.getElementById('userSearchInput');
+                const resultsContainer = document.getElementById('userSearchResults');
+                
+                if (searchInput) {
+                    searchInput.value = '';
+                    searchInput.focus();
+                    searchInput.oninput = (e) => this.searchUsers(e.target.value);
+                }
+                
+                if (resultsContainer) {
+                    resultsContainer.innerHTML = '<p class="text-gray-500 text-center py-4">Start typing to search users...</p>';
+                }
+            },
+
+            searchUsers(query) {
+                const resultsContainer = document.getElementById('userSearchResults');
+                if (!query.trim()) {
+                    resultsContainer.innerHTML = '<p class="text-gray-500 text-center py-4">Start typing to search users...</p>';
+                    return;
+                }
+
+                const lowerQuery = query.toLowerCase();
+                const filtered = this.data.users.filter(u => 
+                    u.email.toLowerCase().includes(lowerQuery) || 
+                    (u.tag && u.tag.toLowerCase().includes(lowerQuery))
+                );
+
+                if (filtered.length === 0) {
+                    resultsContainer.innerHTML = '<p class="text-gray-500 text-center py-4">No users found</p>';
+                    return;
+                }
+
+                resultsContainer.innerHTML = filtered.map(u => `
+                    <div class="flex items-center gap-3 p-3 bg-gray-900/50 rounded-lg cursor-pointer hover:bg-gray-800 transition-colors" 
+                         onclick="window.app.navigate('profile', '${u.email}')">
+                        <div class="w-10 h-10 rounded-full bg-gradient-to-br from-green-400 to-blue-500 flex items-center justify-center font-bold text-black">
+                            ${(u.tag || u.email[0]).toUpperCase()}
+                        </div>
+                        <div>
+                            <p class="text-white font-medium text-sm">@${u.tag || u.email.split('@')[0]}</p>
+                            <p class="text-gray-500 text-xs">${u.email}</p>
+                        </div>
+                    </div>
+                `).join('');
+            },
+
+            switchTab(tab) {
+                this.data.currentTab = tab;
+                
+                const allBtn = document.getElementById('tab-all');
+                const topBtn = document.getElementById('tab-top');
+                const controls = document.getElementById('allNewsControls');
+
+                if (tab === 'all') {
+                    allBtn?.classList.add('bg-green-500/10', 'text-green-400', 'border-green-500/30');
+                    allBtn?.classList.remove('bg-gray-900', 'text-gray-400', 'border-gray-700');
+                    
+                    topBtn?.classList.remove('bg-pink-500/10', 'text-pink-400', 'border-pink-500/30');
+                    topBtn?.classList.add('bg-gray-900', 'text-gray-400', 'border-gray-700');
+                    
+                    controls?.classList.remove('hidden');
+                } else {
+                    topBtn?.classList.add('bg-pink-500/10', 'text-pink-400', 'border-pink-500/30');
+                    topBtn?.classList.remove('bg-gray-900', 'text-gray-400', 'border-gray-700');
+                    
+                    allBtn?.classList.remove('bg-green-500/10', 'text-green-400', 'border-green-500/30');
+                    allBtn?.classList.add('bg-gray-900', 'text-gray-400', 'border-gray-700');
+                    
+                    controls?.classList.add('hidden');
+                }
+                this.renderPosts();
+            },
+
+            setCategory(cat) {
+                this.data.currentCategory = cat;
+                
+                document.querySelectorAll('.category-pill').forEach(btn => {
+                    const btnText = btn.innerText.replace(/[^\w\s]/g, '').trim();
+                    if ((cat === 'All' && btnText === 'All') || btnText === cat) {
+                        btn.classList.add('active');
+                    } else {
+                        btn.classList.remove('active');
+                    }
+                });
+                this.renderPosts();
+            },
+
+            filterPosts() {
+                const searchInput = document.getElementById('searchInput');
+                this.data.searchQuery = searchInput ? searchInput.value.toLowerCase() : '';
+                this.renderPosts();
+            },
+
+            toggleComments(postId) {
+                if (this.data.expandedComments.has(postId)) {
+                    this.data.expandedComments.delete(postId);
+                } else {
+                    this.data.expandedComments.add(postId);
+                }
+                this.renderPosts();
+            },
+
+            formatCommentText(text) {
+                return text.replace(/@(\w+)/g, '<span class="text-blue-400 font-bold hover:underline cursor-pointer">@$1</span>');
+            },
+            // ==========================================
+            // POSTS RENDERING
+            // ==========================================
+            
+            renderPosts() {
+                const container = document.getElementById('postsContainer');
+                if (!container) return;
+                
+                // Show loading state if no data yet
+                if (this.data.posts.length === 0 && this.data.currentUser) {
+                    container.innerHTML = `
+                        <div class="col-span-full flex justify-center py-12">
+                            <div class="loading-pulse text-green-400 text-xl">
+                                <i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Loading posts...
+                            </div>
+                        </div>
+                    `;
+                    
+                    // If not logged in, show login prompt
+                    if (!this.data.currentUser) {
+                        container.innerHTML = `
+                            <div class="col-span-full text-center py-12">
+                                <div class="text-gray-500 mb-4 text-lg">Welcome to MEME MEDIA</div>
+                                <button onclick="window.app.toggleAuthModal()" class="bg-green-600 text-black px-8 py-3 rounded-lg font-bold hover:bg-green-500 transition-colors text-lg">
+                                    Login to View Posts
+                                </button>
+                            </div>
+                        `;
+                    }
+                    return;
+                }
+
+                container.innerHTML = '';
+
+                let filtered = [...this.data.posts];
+
+                // Filter by tab
+                if (this.data.currentTab === 'top') {
+                    filtered = filtered.filter(p => p.type === 'top');
+                }
+
+                // Filter by category
+                if (this.data.currentTab === 'all' && this.data.currentCategory !== 'All') {
+                    filtered = filtered.filter(p => p.category === this.data.currentCategory);
+                }
+
+                // Filter by search
+                if (this.data.searchQuery) {
+                    filtered = filtered.filter(p => 
+                        p.title?.toLowerCase().includes(this.data.searchQuery) || 
+                        p.content?.toLowerCase().includes(this.data.searchQuery)
+                    );
+                }
+
+                if (filtered.length === 0) {
+                    container.innerHTML = `
+                        <div class="col-span-full text-center py-12">
+                            <div class="text-gray-500 mb-4 text-lg">No posts found</div>
+                            ${this.data.currentUser ? `
+                            <button onclick="window.app.navigate('create')" class="bg-green-600 text-black px-6 py-2 rounded-lg font-bold hover:bg-green-500 transition-colors">
+                                Create First Post
+                            </button>` : '<p class="text-sm text-gray-600">Login to create posts</p>'}
+                        </div>
+                    `;
+                    return;
+                }
+
+                filtered.forEach(post => {
+                    const isAdmin = this.admins.includes(post.author);
+                    const isAuthor = this.data.currentUser && this.data.currentUser.email === post.author;
+                    const canDelete = isAdmin || isAuthor;
+                    
+                    let userLikeStatus = 'none';
+                    if (this.data.currentUser) {
+                        if (post.likesList?.includes(this.data.currentUser.email)) userLikeStatus = 'like';
+                        if (post.dislikesList?.includes(this.data.currentUser.email)) userLikeStatus = 'dislike';
+                    }
+
+                    const card = document.createElement('div');
+                    card.className = 'glass-panel rounded-xl overflow-hidden border border-gray-800 hover:border-green-500/50 transition-all duration-300 flex flex-col';
+                    
+                    const allComments = post.comments || [];
+                    const isExpanded = this.data.expandedComments.has(post.id);
+                    const displayedComments = isExpanded ? allComments : allComments.slice(0, 3);
+                    const hasMoreComments = allComments.length > 3;
+                    
+                    let commentsHtml = '';
+                    if (allComments.length > 0) {
+                        const commentsList = displayedComments.map(c => `
+                            <div class="text-xs text-gray-400 mb-1">
+                                <span class="text-green-400 font-bold cursor-pointer hover:underline" 
+                                      onclick="window.app.navigate('profile', '${this.getUserEmailByTag(c.user)}')">@${c.user}</span>: 
+                                <span>${this.formatCommentText(c.text)}</span>
+                            </div>
+                        `).join('');
+                        
+                        const readMoreBtn = hasMoreComments ? `
+                            <button onclick="window.app.toggleComments('${post.id}')" class="text-xs text-blue-400 hover:text-blue-300 mb-2 font-medium">
+                                ${isExpanded ? 'Read Less ↑' : `Read More (${allComments.length - 3} more) ↓`}
+                            </button>
+                        ` : '';
+                        
+                        commentsHtml = `<div class="mt-3 pt-3 border-t border-gray-700 space-y-1">
+                            ${readMoreBtn}
+                            ${commentsList}
+                        </div>`;
+                    }
+                    
+                    // Format timestamp
+                    let dateStr = 'Just now';
+                    if (post.timestamp) {
+                        const date = post.timestamp.toDate ? post.timestamp.toDate() : new Date(post.timestamp);
+                        dateStr = date.toLocaleDateString();
+                    }
+                    
+                    card.innerHTML = `
+                        ${post.image ? `
+                        <div class="h-48 overflow-hidden relative group">
+                            <img src="${post.image}" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" 
+                                 onerror="this.src='https://via.placeholder.com/800x400?text=Meme+Media'">
+                            <div class="absolute top-2 right-2 bg-black/70 backdrop-blur px-2 py-1 rounded text-xs font-bold text-green-400 border border-green-500/30">
+                                ${post.category}
+                            </div>
+                            ${post.type === 'top' ? `<div class="absolute top-2 left-2 bg-pink-600 text-white px-2 py-1 rounded text-xs font-bold shadow-lg shadow-pink-500/20"><i class="fa-solid fa-crown"></i> TOP</div>` : ''}
+                        </div>` : ''}
+                        
+                        <div class="p-5 flex-grow flex flex-col">
+                            <div class="flex justify-between items-start mb-2">
+                                <h3 class="text-xl font-bold text-white leading-tight hover:text-green-400 cursor-pointer" 
+                                    onclick="window.app.navigate('profile', '${post.author}')">${post.title}</h3>
+                            </div>
+                            
+                            <div class="flex items-center gap-2 mb-3 text-xs text-gray-400">
+                                <span class="text-green-400 font-mono cursor-pointer hover:underline" 
+                                      onclick="window.app.navigate('profile', '${post.author}')">@${post.authorTag}</span>
+                                <span>•</span>
+                                <span>${dateStr}</span>
+                                ${isAdmin ? '<span class="text-pink-400 text-[10px] border border-pink-400/30 px-1 rounded">ADMIN</span>' : ''}
+                            </div>
+
+                            <p class="text-gray-300 text-sm mb-4 line-clamp-3 flex-grow">${post.content}</p>
+                            
+                            <div class="flex items-center justify-between pt-4 border-t border-gray-800 mt-auto">
+                                <div class="flex gap-4">
+                                    <button onclick="window.app.handleVote('${post.id}', 'like')" 
+                                            class="flex items-center gap-1 text-sm ${userLikeStatus === 'like' ? 'text-green-400' : 'text-gray-500 hover:text-green-400'} transition-colors">
+                                        <i class="fa-solid fa-arrow-up"></i> ${post.likes || 0}
+                                    </button>
+                                    <button onclick="window.app.handleVote('${post.id}', 'dislike')" 
+                                            class="flex items-center gap-1 text-sm ${userLikeStatus === 'dislike' ? 'text-red-400' : 'text-gray-500 hover:text-red-400'} transition-colors">
+                                        <i class="fa-solid fa-arrow-down"></i> ${post.dislikes || 0}
+                                    </button>
+                                    <button onclick="window.app.showCommentModal('${post.id}')" 
+                                            class="flex items-center gap-1 text-sm text-gray-500 hover:text-blue-400 transition-colors">
+                                        <i class="fa-solid fa-comment"></i> ${post.comments?.length || 0}
+                                    </button>
+                                </div>
+                                ${canDelete ? `
+                                <button onclick="window.app.deletePost('${post.id}')" class="text-gray-600 hover:text-red-500 transition-colors text-xs">
+                                    <i class="fa-solid fa-trash"></i> Delete
+                                </button>` : ''}
+                            </div>
+                            ${commentsHtml}
+                        </div>
+                    `;
+                    container.appendChild(card);
+                });
+            },
+
+            getUserEmailByTag(tag) {
+                const user = this.data.users.find(u => u.tag === tag);
+                return user ? user.email : '';
+            },
+            // ==========================================
+            // POST ACTIONS
+            // ==========================================
+            
+            async handleNewPostClick() {
+                if (!this.data.currentUser) {
+                    this.showToast('Please login to create a post', 'error');
+                    this.toggleAuthModal();
+                    return;
+                }
+                
+                try {
+                    const userDoc = await db.collection('users').doc(this.data.currentUser.email).get();
+                    const userData = userDoc.data();
+                    const today = new Date().toDateString();
+                    
+                    // Check daily limit for non-admins
+                    if (!this.admins.includes(this.data.currentUser.email)) {
+                        if (userData.lastPostDate === today && userData.postsToday >= 3) {
+                            this.showToast('Daily post limit reached (3/3). Try again tomorrow!', 'error');
+                            return;
+                        }
+                    }
+
+                    this.navigate('create');
+                } catch (error) {
+                    console.error('Error checking post limit:', error);
+                    this.navigate('create');
+                }
+            },
+
+            async submitPost(e) {
+                e.preventDefault();
+                const form = e.target;
+                
+                if (!this.data.currentUser) {
+                    this.showToast('Please login first', 'error');
+                    return;
+                }
+
+                const title = document.getElementById('postTitle').value.trim();
+                const content = document.getElementById('postContent').value.trim();
+                const imageUrl = document.getElementById('postImage').value.trim();
+                const category = document.getElementById('postCategory').value;
+                
+                // Check if admin for post type
+                let postType = 'normal';
+                const typeSelect = document.getElementById('postType');
+                if (typeSelect && this.admins.includes(this.data.currentUser.email)) {
+                    postType = typeSelect.value;
+                }
+
+                if (!title || !content) {
+                    this.showToast('Title and content are required', 'error');
+                    return;
+                }
+
+                try {
+                    // Generate unique tag for user if not exists
+                    const userRef = db.collection('users').doc(this.data.currentUser.email);
+                    const userDoc = await userRef.get();
+                    const userData = userDoc.data();
+                    
+                    let authorTag = userData.tag;
+                    if (!authorTag) {
+                        authorTag = this.generateUserTag(this.data.currentUser.email);
+                        await userRef.update({ tag: authorTag });
+                    }
+
+                    const newPost = {
+                        title,
+                        content,
+                        image: imageUrl || null,
+                        category: category || 'General',
+                        type: postType,
+                        author: this.data.currentUser.email,
+                        authorTag: authorTag,
+                        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+                        likes: 0,
+                        dislikes: 0,
+                        likesList: [],
+                        dislikesList: [],
+                        comments: []
+                    };
+
+                    // Add post to Firestore - this will trigger real-time update for ALL users
+                    await db.collection('posts').add(newPost);
+
+                    // Update user's post count and date
+                    const today = new Date().toDateString();
+                    const updates = {
+                        lastPostDate: today,
+                        postsToday: firebase.firestore.FieldValue.increment(1)
+                    };
+                    await userRef.update(updates);
+
+                    this.showToast('Post created successfully!', 'success');
+                    form.reset();
+                    this.navigate('home');
+                    
+                } catch (error) {
+                    console.error('Error creating post:', error);
+                    this.showToast('Error creating post: ' + error.message, 'error');
+                }
+            },
+
+            generateUserTag(email) {
+                // Generate a unique tag from email
+                const prefix = email.split('@')[0].substring(0, 8);
+                const random = Math.floor(Math.random() * 1000);
+                return `${prefix}${random}`;
+            },
+
+            async deletePost(postId) {
+                if (!this.data.currentUser) {
+                    this.showToast('Please login first', 'error');
+                    return;
+                }
+
+                if (!confirm('Are you sure you want to delete this post? This action cannot be undone.')) {
+                    return;
+                }
+
+                try {
+                    // Delete from Firestore - this will trigger real-time removal for ALL users
+                    await db.collection('posts').doc(postId).delete();
+                    this.showToast('Post deleted successfully', 'success');
+                    // Real-time listener will automatically update UI for all users
+                } catch (error) {
+                    console.error('Error deleting post:', error);
+                    this.showToast('Error deleting post: ' + error.message, 'error');
+                }
+            },
+
+            async handleVote(postId, voteType) {
+                if (!this.data.currentUser) {
+                    this.showToast('Please login to vote', 'error');
+                    this.toggleAuthModal();
+                    return;
+                }
+
+                const postRef = db.collection('posts').doc(postId);
+                
+                try {
+                    await db.runTransaction(async (transaction) => {
+                        const postDoc = await transaction.get(postRef);
+                        if (!postDoc.exists) {
+                            throw new Error('Post not found');
+                        }
+
+                        const post = postDoc.data();
+                        const userEmail = this.data.currentUser.email;
+                        let likesList = post.likesList || [];
+                        let dislikesList = post.dislikesList || [];
+                        let likes = post.likes || 0;
+                        let dislikes = post.dislikes || 0;
+
+                        // Remove existing votes
+                        if (likesList.includes(userEmail)) {
+                            likesList = likesList.filter(e => e !== userEmail);
+                            likes--;
+                        }
+                        if (dislikesList.includes(userEmail)) {
+                            dislikesList = dislikesList.filter(e => e !== userEmail);
+                            dislikes--;
+                        }
+
+                        // Add new vote if different from current
+                        const currentVote = post.likesList?.includes(userEmail) ? 'like' : 
+                                          post.dislikesList?.includes(userEmail) ? 'dislike' : 'none';
+                        
+                        if (currentVote !== voteType) {
+                            if (voteType === 'like') {
+                                likesList.push(userEmail);
+                                likes++;
+                            } else if (voteType === 'dislike') {
+                                dislikesList.push(userEmail);
+                                dislikes++;
+                            }
+                        }
+
+                        transaction.update(postRef, {
+                            likes: likes,
+                            dislikes: dislikes,
+                            likesList: likesList,
+                            dislikesList: dislikesList
+                        });
+                    });
+                    
+                    // Real-time listener will update UI automatically for all users
+                } catch (error) {
+                    console.error('Error voting:', error);
+                    this.showToast('Error voting: ' + error.message, 'error');
+                }
+            },
+
+            showCommentModal(postId) {
+                if (!this.data.currentUser) {
+                    this.showToast('Please login to comment', 'error');
+                    this.toggleAuthModal();
+                    return;
+                }
+
+                const comment = prompt('Enter your comment:');
+                if (!comment || !comment.trim()) return;
+
+                this.submitComment(postId, comment.trim());
+            },
+
+            async submitComment(postId, commentText) {
+                try {
+                    const postRef = db.collection('posts').doc(postId);
+                    const userTag = this.data.currentUser.tag || this.data.currentUser.email.split('@')[0];
+                    
+                    const newComment = {
+                        user: userTag,
+                        text: commentText,
+                        timestamp: new Date().toISOString()
+                    };
+
+                    await postRef.update({
+                        comments: firebase.firestore.FieldValue.arrayUnion(newComment)
+                    });
+                    
+                    // Real-time listener will update UI automatically for all users
+                    this.showToast('Comment added!', 'success');
+                } catch (error) {
+                    console.error('Error adding comment:', error);
+                    this.showToast('Error adding comment: ' + error.message, 'error');
+                }
+            },
+            // ==========================================
+            // PROFILE AND FOLLOWERS
+            // ==========================================
+            
+            async renderProfile(email) {
+                if (!email && this.data.currentUser) {
+                    email = this.data.currentUser.email;
+                }
+                
+                if (!email) {
+                    this.showToast('Please login to view profiles', 'error');
+                    this.toggleAuthModal();
+                    return;
+                }
+                
+                this.data.profileViewUser = email;
+                
+                const container = document.getElementById('profileContainer');
+                if (!container) return;
+
+                // Show loading state
+                container.innerHTML = '<div class="flex justify-center py-12"><i class="fa-solid fa-circle-notch fa-spin text-green-400 text-3xl"></i></div>';
+
+                try {
+                    // Get user data
+                    const userDoc = await db.collection('users').doc(email).get();
+                    const userData = userDoc.exists ? userDoc.data() : {};
+                    const userTag = userData.tag || email.split('@')[0];
+                    
+                    // Get user's posts from local data (already synced in real-time)
+                    const userPosts = this.data.posts.filter(p => p.author === email);
+                    
+                    // Check if current user is following this user
+                    let isFollowing = false;
+                    let followerCount = userData.followers?.length || 0;
+                    let followingCount = userData.following?.length || 0;
+                    
+                    if (this.data.currentUser && this.data.currentUser.email !== email) {
+                        const currentUserDoc = await db.collection('users').doc(this.data.currentUser.email).get();
+                        const currentUserData = currentUserDoc.data();
+                        isFollowing = currentUserData.following?.includes(email) || false;
+                    }
+
+                    const isOwnProfile = this.data.currentUser && this.data.currentUser.email === email;
+                    const isAdmin = this.admins.includes(email);
+
+                    container.innerHTML = `
+                        <div class="glass-panel rounded-xl p-8 mb-6 border border-gray-800">
+                            <div class="flex items-center gap-6 mb-6">
+                                <div class="w-20 h-20 rounded-full bg-gradient-to-br from-green-400 to-blue-500 flex items-center justify-center text-3xl font-bold text-black">
+                                    ${userTag[0].toUpperCase()}
+                                </div>
+                                <div class="flex-1">
+                                    <h2 class="text-2xl font-bold text-white mb-1">@${userTag}</h2>
+                                    <p class="text-gray-400 text-sm mb-2">${email}</p>
+                                    <div class="flex gap-2">
+                                        ${isAdmin ? '<span class="bg-pink-600 text-white px-2 py-1 rounded text-xs font-bold">ADMIN</span>' : ''}
+                                        ${isOwnProfile ? '<span class="bg-blue-600 text-white px-2 py-1 rounded text-xs font-bold">YOU</span>' : ''}
+                                    </div>
+                                </div>
+                                ${!isOwnProfile && this.data.currentUser ? `
+                                    <button onclick="window.app.toggleFollow('${email}')" 
+                                            class="px-6 py-2 rounded-lg font-bold transition-colors ${isFollowing ? 'bg-gray-700 text-white hover:bg-gray-600' : 'bg-green-600 text-black hover:bg-green-500'}">
+                                        ${isFollowing ? 'Unfollow' : 'Follow'}
+                                    </button>
+                                ` : ''}
+                            </div>
+                            
+                            <div class="flex gap-8 mb-6">
+                                <div class="text-center cursor-pointer hover:text-green-400 transition-colors">
+                                    <div class="text-2xl font-bold text-white">${userPosts.length}</div>
+                                    <div class="text-xs text-gray-500 uppercase tracking-wide">Posts</div>
+                                </div>
+                                <div class="text-center cursor-pointer hover:text-green-400 transition-colors" onclick="window.app.navigate('followers', '${email}')">
+                                    <div class="text-2xl font-bold text-white">${followerCount}</div>
+                                    <div class="text-xs text-gray-500 uppercase tracking-wide">Followers</div>
+                                </div>
+                                <div class="text-center cursor-pointer hover:text-green-400 transition-colors" onclick="window.app.navigate('followers', '${email}')">
+                                    <div class="text-2xl font-bold text-white">${followingCount}</div>
+                                    <div class="text-xs text-gray-500 uppercase tracking-wide">Following</div>
+                                </div>
+                            </div>
+
+                            <div class="border-t border-gray-800 pt-6">
+                                <h3 class="text-lg font-bold text-white mb-4">Recent Posts</h3>
+                                ${userPosts.length === 0 ? '<p class="text-gray-500">No posts yet</p>' : ''}
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                            ${userPosts.map(post => `
+                                <div class="glass-panel rounded-xl overflow-hidden border border-gray-800 hover:border-green-500/50 transition-all cursor-pointer" onclick="window.app.navigate('home')">
+                                    ${post.image ? `<div class="h-32 overflow-hidden"><img src="${post.image}" class="w-full h-full object-cover" onerror="this.src='https://via.placeholder.com/400x200?text=No+Image'"></div>` : ''}
+                                    <div class="p-4">
+                                        <h4 class="font-bold text-white mb-2 line-clamp-1">${post.title}</h4>
+                                        <p class="text-xs text-gray-400">${new Date(post.timestamp?.toDate?.() || post.timestamp).toLocaleDateString()}</p>
+                                        <div class="flex gap-3 mt-2 text-xs text-gray-500">
+                                            <span><i class="fa-solid fa-arrow-up text-green-400"></i> ${post.likes || 0}</span>
+                                            <span><i class="fa-solid fa-comment text-blue-400"></i> ${post.comments?.length || 0}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `;
+                } catch (error) {
+                    console.error('Error rendering profile:', error);
+                    container.innerHTML = '<div class="text-center text-red-400 py-12">Error loading profile</div>';
+                }
+            },
+
+            async toggleFollow(targetEmail) {
+                if (!this.data.currentUser) return;
+                
+                const currentUserRef = db.collection('users').doc(this.data.currentUser.email);
+                const targetUserRef = db.collection('users').doc(targetEmail);
+                
+                try {
+                    const currentDoc = await currentUserRef.get();
+                    const currentData = currentDoc.data();
+                    const following = currentData.following || [];
+                    
+                    if (following.includes(targetEmail)) {
+                        // Unfollow
+                        await currentUserRef.update({
+                            following: firebase.firestore.FieldValue.arrayRemove(targetEmail)
+                        });
+                        await targetUserRef.update({
+                            followers: firebase.firestore.FieldValue.arrayRemove(this.data.currentUser.email)
+                        });
+                        this.showToast('Unfollowed user', 'success');
+                    } else {
+                        // Follow
+                        await currentUserRef.update({
+                            following: firebase.firestore.FieldValue.arrayUnion(targetEmail)
+                        });
+                        await targetUserRef.update({
+                            followers: firebase.firestore.FieldValue.arrayUnion(this.data.currentUser.email)
+                        });
+                        this.showToast('Following user!', 'success');
+                    }
+                    
+                    // Refresh profile view
+                    this.renderProfile(targetEmail);
+                } catch (error) {
+                    console.error('Error toggling follow:', error);
+                    this.showToast('Error: ' + error.message, 'error');
+                }
+            },
+
+            async renderFollowersList(email) {
+                const container = document.getElementById('followersContainer');
+                if (!container) return;
+
+                container.innerHTML = '<div class="flex justify-center py-12"><i class="fa-solid fa-circle-notch fa-spin text-green-400 text-3xl"></i></div>';
+
+                try {
+                    const userDoc = await db.collection('users').doc(email).get();
+                    const userData = userDoc.data() || {};
+                    const userTag = userData.tag || email.split('@')[0];
+                    const followers = userData.followers || [];
+                    const following = userData.following || [];
+
+                    // Get details for followers/following
+                    const getUserDetails = async (emailList) => {
+                        const details = [];
+                        for (const e of emailList) {
+                            const u = await db.collection('users').doc(e).get();
+                            if (u.exists) {
+                                details.push({ email: e, ...u.data() });
+                            }
+                        }
+                        return details;
+                    };
+
+                    const [followersDetails, followingDetails] = await Promise.all([
+                        getUserDetails(followers),
+                        getUserDetails(following)
+                    ]);
+
+                    container.innerHTML = `
+                        <div class="glass-panel rounded-xl p-6 border border-gray-800">
+                            <h2 class="text-xl font-bold text-white mb-6">@${userTag}'s Network</h2>
+                            
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div>
+                                    <h3 class="text-green-400 font-bold mb-4 flex items-center gap-2">
+                                        <i class="fa-solid fa-users"></i> Followers (${followers.length})
+                                    </h3>
+                                    <div class="space-y-2 max-h-96 overflow-y-auto">
+                                        ${followersDetails.length === 0 ? '<p class="text-gray-500 text-sm">No followers yet</p>' : ''}
+                                        ${followersDetails.map(f => `
+                                            <div class="flex items-center gap-3 p-3 bg-gray-900/50 rounded-lg cursor-pointer hover:bg-gray-800 transition-colors" onclick="window.app.navigate('profile', '${f.email}')">
+                                                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-green-400 to-blue-500 flex items-center justify-center font-bold text-black">
+                                                    ${(f.tag || f.email[0]).toUpperCase()}
+                                                </div>
+                                                <div>
+                                                    <p class="text-white font-medium text-sm">@${f.tag || f.email.split('@')[0]}</p>
+                                                    <p class="text-gray-500 text-xs">${f.email}</p>
+                                                </div>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <h3 class="text-blue-400 font-bold mb-4 flex items-center gap-2">
+                                        <i class="fa-solid fa-user-plus"></i> Following (${following.length})
+                                    </h3>
+                                    <div class="space-y-2 max-h-96 overflow-y-auto">
+                                        ${followingDetails.length === 0 ? '<p class="text-gray-500 text-sm">Not following anyone yet</p>' : ''}
+                                        ${followingDetails.map(f => `
+                                            <div class="flex items-center gap-3 p-3 bg-gray-900/50 rounded-lg cursor-pointer hover:bg-gray-800 transition-colors" onclick="window.app.navigate('profile', '${f.email}')">
+                                                <div class="w-10 h-10 rounded-full bg-gradient-to-br from-green-400 to-blue-500 flex items-center justify-center font-bold text-black">
+                                                    ${(f.tag || f.email[0]).toUpperCase()}
+                                                </div>
+                                                <div>
+                                                    <p class="text-white font-medium text-sm">@${f.tag || f.email.split('@')[0]}</p>
+                                                    <p class="text-gray-500 text-xs">${f.email}</p>
+                                                </div>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                } catch (error) {
+                    console.error('Error rendering followers:', error);
+                    container.innerHTML = '<div class="text-center text-red-400 py-12">Error loading followers</div>';
+                }
+            },
+            // ==========================================
+            // AUTHENTICATION UI
+            // ==========================================
+            
+            toggleAuthModal() {
+                const modal = document.getElementById('authModal');
+                if (modal) {
+                    modal.classList.toggle('hidden');
+                    if (!modal.classList.contains('hidden')) {
+                        this.showAuthForm('login');
+                    }
+                }
+            },
+
+            showAuthForm(mode) {
+                this.data.authMode = mode;
+                const loginForm = document.getElementById('loginForm');
+                const registerForm = document.getElementById('registerForm');
+                const loginTab = document.getElementById('loginTab');
+                const registerTab = document.getElementById('registerTab');
+
+                if (mode === 'login') {
+                    loginForm?.classList.remove('hidden');
+                    registerForm?.classList.add('hidden');
+                    loginTab?.classList.add('text-green-400', 'border-b-2', 'border-green-400');
+                    loginTab?.classList.remove('text-gray-400');
+                    registerTab?.classList.remove('text-green-400', 'border-b-2', 'border-green-400');
+                    registerTab?.classList.add('text-gray-400');
+                } else {
+                    loginForm?.classList.add('hidden');
+                    registerForm?.classList.remove('hidden');
+                    registerTab?.classList.add('text-green-400', 'border-b-2', 'border-green-400');
+                    registerTab?.classList.remove('text-gray-400');
+                    loginTab?.classList.remove('text-green-400', 'border-b-2', 'border-green-400');
+                    loginTab?.classList.add('text-gray-400');
+                }
+            },
+
+            async handleLogin(e) {
+                e.preventDefault();
+                const email = document.getElementById('loginEmail').value;
+                const password = document.getElementById('loginPassword').value;
+
+                try {
+                    await auth.signInWithEmailAndPassword(email, password);
+                    this.toggleAuthModal();
+                    this.showToast('Welcome back!', 'success');
+                } catch (error) {
+                    console.error('Login error:', error);
+                    let message = 'Login failed';
+                    if (error.code === 'auth/user-not-found') message = 'User not found';
+                    if (error.code === 'auth/wrong-password') message = 'Wrong password';
+                    if (error.code === 'auth/invalid-email') message = 'Invalid email';
+                    this.showToast(message, 'error');
+                }
+            },
+
+            async handleRegister(e) {
+                e.preventDefault();
+                const email = document.getElementById('regEmail').value;
+                const password = document.getElementById('regPassword').value;
+                const confirmPassword = document.getElementById('regConfirmPassword').value;
+
+                if (password !== confirmPassword) {
+                    this.showToast('Passwords do not match', 'error');
+                    return;
+                }
+
+                if (password.length < 6) {
+                    this.showToast('Password must be at least 6 characters', 'error');
+                    return;
+                }
+
+                try {
+                    const userCredential = await auth.createUserWithEmailAndPassword(email, password);
+                    
+                    // Create user document
+                    const tag = this.generateUserTag(email);
+                    await db.collection('users').doc(email).set({
+                        email: email,
+                        tag: tag,
+                        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+                        followers: [],
+                        following: [],
+                        postsToday: 0,
+                        lastPostDate: null
+                    });
+
+                    this.toggleAuthModal();
+                    this.showToast('Account created! Welcome!', 'success');
+                } catch (error) {
+                    console.error('Registration error:', error);
+                    let message = 'Registration failed';
+                    if (error.code === 'auth/email-already-in-use') message = 'Email already in use';
+                    if (error.code === 'auth/invalid-email') message = 'Invalid email';
+                    if (error.code === 'auth/weak-password') message = 'Password is too weak';
+                    this.showToast(message, 'error');
+                }
+            },
+
+            async logout() {
+                try {
+                    await auth.signOut();
+                    this.data.currentUser = null;
+                    this.stopRealtimeListeners();
+                    this.data.posts = [];
+                    this.data.users = [];
+                    this.navigate('home');
+                    this.showToast('Logged out successfully', 'success');
+                } catch (error) {
+                    console.error('Logout error:', error);
+                    this.showToast('Error logging out', 'error');
+                }
+            },
+
+            updateAuthUI() {
+                const authBtn = document.getElementById('authBtn');
+                const userDisplay = document.getElementById('userDisplay');
+                const newPostBtn = document.getElementById('navCreate');
+
+                if (this.data.currentUser) {
+                    if (authBtn) {
+                        authBtn.innerHTML = '<i class="fa-solid fa-sign-out-alt"></i><span class="hidden sm:inline ml-2">Logout</span>';
+                        authBtn.onclick = () => this.logout();
+                    }
+                    if (userDisplay) {
+                        const tag = this.data.currentUser.tag || this.data.currentUser.email.split('@')[0];
+                        userDisplay.innerHTML = `<span class="text-green-400 font-bold">@${tag}</span>`;
+                        userDisplay.classList.remove('hidden');
+                    }
+                    if (newPostBtn) {
+                        newPostBtn.classList.remove('hidden');
+                    }
+                } else {
+                    if (authBtn) {
+                        authBtn.innerHTML = '<i class="fa-solid fa-sign-in-alt"></i><span class="hidden sm:inline ml-2">Login</span>';
+                        authBtn.onclick = () => this.toggleAuthModal();
+                    }
+                    if (userDisplay) {
+                        userDisplay.innerHTML = '';
+                        userDisplay.classList.add('hidden');
+                    }
+                    if (newPostBtn) {
+                        newPostBtn.classList.add('hidden');
+                    }
+                }
+            },
+            // ==========================================
+            // UTILITY FUNCTIONS
+            // ==========================================
+            
+            showToast(message, type = 'info') {
+                const toast = document.createElement('div');
+                const colors = {
+                    success: 'bg-green-600',
+                    error: 'bg-red-600',
+                    info: 'bg-blue-600'
+                };
+                
+                toast.className = `fixed bottom-4 right-4 ${colors[type]} text-white px-6 py-3 rounded-lg shadow-lg z-50 transform transition-all duration-300 translate-y-0 flex items-center gap-2`;
+                toast.innerHTML = `
+                    <i class="fa-solid ${type === 'success' ? 'fa-check' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle'}"></i>
+                    <span>${message}</span>
+                `;
+                
+                document.body.appendChild(toast);
+                
+                setTimeout(() => {
+                    toast.style.transform = 'translateY(100px)';
+                    toast.style.opacity = '0';
+                    setTimeout(() => toast.remove(), 300);
+                }, 3000);
+            },
+
+            setupEventListeners() {
+                // Navigation
+                document.getElementById('navHome')?.addEventListener('click', () => this.navigate('home'));
+                document.getElementById('navCreate')?.addEventListener('click', () => this.handleNewPostClick());
+                document.getElementById('navProfile')?.addEventListener('click', () => this.navigate('profile'));
+                document.getElementById('navSearch')?.addEventListener('click', () => this.navigate('search'));
+
+                // Tabs
+                document.getElementById('tab-all')?.addEventListener('click', () => this.switchTab('all'));
+                document.getElementById('tab-top')?.addEventListener('click', () => this.switchTab('top'));
+
+                // Search
+                const searchInput = document.getElementById('searchInput');
+                searchInput?.addEventListener('input', () => this.filterPosts());
+
+                // Category pills
+                document.querySelectorAll('.category-pill').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        const cat = e.target.innerText.replace(/[^\w\s]/g, '').trim();
+                        this.setCategory(cat);
+                    });
+                });
+
+                // Auth forms
+                document.getElementById('loginForm')?.addEventListener('submit', (e) => this.handleLogin(e));
+                document.getElementById('registerForm')?.addEventListener('submit', (e) => this.handleRegister(e));
+                document.getElementById('showRegister')?.addEventListener('click', () => this.showAuthForm('register'));
+                document.getElementById('showLogin')?.addEventListener('click', () => this.showAuthForm('login'));
+                document.getElementById('closeAuth')?.addEventListener('click', () => this.toggleAuthModal());
+
+                // Create post form
+                document.getElementById('createPostForm')?.addEventListener('submit', (e) => this.submitPost(e));
+                document.getElementById('cancelPost')?.addEventListener('click', () => this.navigate('home'));
+                
+                // Close modal on outside click
+                document.getElementById('authModal')?.addEventListener('click', (e) => {
+                    if (e.target.id === 'authModal') this.toggleAuthModal();
+                });
+            },
+
+            render() {
+                this.updateAuthUI();
+                this.navigate('home');
+            }
+        };
+
+        // Initialize app when DOM is ready
+        document.addEventListener('DOMContentLoaded', () => {
+            window.app.init();
+        });
+    </script>
+</head>
+<body class="bg-black text-gray-100 min-h-screen font-['Space_Grotesk']">
+    <!-- Navigation -->
+    <nav class="fixed top-0 w-full bg-black/80 backdrop-blur-md border-b border-gray-800 z-40">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-16">
+                <div class="flex items-center gap-2 cursor-pointer" onclick="window.app.navigate('home')">
+                    <div class="w-8 h-8 bg-gradient-to-br from-green-400 to-blue-500 rounded-lg flex items-center justify-center">
+                        <i class="fa-solid fa-bolt text-black"></i>
+                    </div>
+                    <span class="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-green-400 to-blue-500">
+                        MEME MEDIA
+                    </span>
+                </div>
+                
+                <div class="flex items-center gap-4">
+                    <button id="navSearch" class="text-gray-400 hover:text-white transition-colors p-2">
+                        <i class="fa-solid fa-search"></i>
+                    </button>
+                    <button id="navCreate" class="hidden bg-green-600 text-black px-4 py-2 rounded-lg font-bold hover:bg-green-500 transition-colors flex items-center gap-2">
+                        <i class="fa-solid fa-plus"></i> <span class="hidden sm:inline">New Post</span>
+                    </button>
+                    <button id="navProfile" class="text-gray-400 hover:text-white transition-colors p-2">
+                        <i class="fa-solid fa-user"></i>
+                    </button>
+                    <span id="userDisplay" class="hidden sm:block text-sm"></span>
+                    <button id="authBtn" class="text-gray-400 hover:text-white transition-colors p-2 flex items-center">
+                        <i class="fa-solid fa-sign-in-alt"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="pt-20 pb-12 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto">
+        
+        <!-- HOME VIEW -->
+        <div id="homeView" class="space-y-6">
+            <!-- Tabs -->
+            <div class="flex gap-4 mb-6">
+                <button id="tab-all" class="px-6 py-2 rounded-lg font-bold border transition-all bg-green-500/10 text-green-400 border-green-500/30">
+                    <i class="fa-solid fa-newspaper mr-2"></i>All News
+                </button>
+                <button id="tab-top" class="px-6 py-2 rounded-lg font-bold border transition-all bg-gray-900 text-gray-400 border-gray-700">
+                    <i class="fa-solid fa-crown mr-2"></i>Top News
+                </button>
+            </div>
+
+            <!-- Controls -->
+            <div id="allNewsControls" class="flex flex-col sm:flex-row gap-4 mb-6">
+                <div class="relative flex-1">
+                    <i class="fa-solid fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500"></i>
+                    <input type="text" id="searchInput" placeholder="Search posts..." 
+                           class="w-full bg-gray-900 border border-gray-700 rounded-lg pl-10 pr-4 py-2 text-white focus:outline-none focus:border-green-500">
+                </div>
+                <div class="flex gap-2 overflow-x-auto pb-2">
+                    <button class="category-pill active px-4 py-2 rounded-full bg-green-600 text-black font-bold text-sm whitespace-nowrap">All</button>
+                    <button class="category-pill px-4 py-2 rounded-full bg-gray-900 border border-gray-700 text-gray-300 hover:border-green-500/50 text-sm whitespace-nowrap">Crypto</button>
+                    <button class="category-pill px-4 py-2 rounded-full bg-gray-900 border border-gray-700 text-gray-300 hover:border-green-500/50 text-sm whitespace-nowrap">Memes</button>
+                    <button class="category-pill px-4 py-2 rounded-full bg-gray-900 border border-gray-700 text-gray-300 hover:border-green-500/50 text-sm whitespace-nowrap">DeFi</button>
+                    <button class="category-pill px-4 py-2 rounded-full bg-gray-900 border border-gray-700 text-gray-300 hover:border-green-500/50 text-sm whitespace-nowrap">NFT</button>
+                </div>
+            </div>
+
+            <!-- Posts Grid -->
+            <div id="postsContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- Posts will be rendered here -->
+            </div>
+        </div>
+
+        <!-- CREATE POST VIEW -->
+        <div id="createPostView" class="hidden max-w-2xl mx-auto">
+            <div class="glass-panel rounded-xl p-8 border border-gray-800">
+                <h2 class="text-2xl font-bold text-white mb-6">Create New Post</h2>
+                <form id="createPostForm" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-400 mb-2">Title *</label>
+                        <input type="text" id="postTitle" required
+                               class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-green-500">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-400 mb-2">Category</label>
+                        <select id="postCategory" class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-green-500">
+                            <option value="General">General</option>
+                            <option value="Crypto">Crypto</option>
+                            <option value="Memes">Memes</option>
+                            <option value="DeFi">DeFi</option>
+                            <option value="NFT">NFT</option>
+                        </select>
+                    </div>
+
+                    <div id="postTypeSection" class="hidden">
+                        <label class="block text-sm font-medium text-gray-400 mb-2">Post Type (Admin Only)</label>
+                        <select id="postType" class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-green-500">
+                            <option value="normal">Normal</option>
+                            <option value="top">Top News</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-400 mb-2">Image URL (optional)</label>
+                        <input type="url" id="postImage" placeholder="https://example.com/image.jpg"
+                               class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-green-500">
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-400 mb-2">Content *</label>
+                        <textarea id="postContent" rows="6" required placeholder="What's happening in the meme economy?"
+                                  class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-green-500 resize-none"></textarea>
+                    </div>
+
+                    <div class="flex gap-4 pt-4">
+                        <button type="submit" class="flex-1 bg-green-600 text-black font-bold py-3 rounded-lg hover:bg-green-500 transition-colors">
+                            Publish Post
+                        </button>
+                        <button type="button" id="cancelPost" class="flex-1 bg-gray-800 text-white font-bold py-3 rounded-lg hover:bg-gray-700 transition-colors">
+                            Cancel
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- PROFILE VIEW -->
+        <div id="profileView" class="hidden">
+            <div id="profileContainer">
+                <!-- Profile content rendered here -->
+            </div>
+        </div>
+
+        <!-- FOLLOWERS VIEW -->
+        <div id="followersView" class="hidden">
+            <div id="followersContainer">
+                <!-- Followers content rendered here -->
+            </div>
+        </div>
+
+        <!-- SEARCH USERS VIEW -->
+        <div id="searchUserView" class="hidden max-w-2xl mx-auto">
+            <div class="glass-panel rounded-xl p-6 border border-gray-800">
+                <h2 class="text-xl font-bold text-white mb-4">Search Users</h2>
+                <input type="text" id="userSearchInput" placeholder="Search by username or email..."
+                       class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-green-500 mb-4">
+                <div id="userSearchResults" class="space-y-2">
+                    <!-- Search results rendered here -->
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Auth Modal -->
+    <div id="authModal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="glass-panel rounded-xl p-8 max-w-md w-full border border-gray-800 relative">
+            <button id="closeAuth" class="absolute top-4 right-4 text-gray-400 hover:text-white p-2">
+                <i class="fa-solid fa-times text-xl"></i>
+            </button>
+            
+            <div class="flex gap-4 mb-6 border-b border-gray-800">
+                <button id="loginTab" class="pb-2 text-green-400 border-b-2 border-green-400 font-bold">Login</button>
+                <button id="registerTab" class="pb-2 text-gray-400 font-bold">Register</button>
+            </div>
+
+            <!-- Login Form -->
+            <form id="loginForm" class="space-y-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Email</label>
+                    <input type="email" id="loginEmail" required
+                           class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-green-500">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Password</label>
+                    <input type="password" id="loginPassword" required
+                           class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-green-500">
+                </div>
+                <button type="submit" class="w-full bg-green-600 text-black font-bold py-2 rounded-lg hover:bg-green-500 transition-colors">
+                    Login
+                </button>
+                <p class="text-center text-sm text-gray-400">
+                    Don't have an account? 
+                    <button type="button" id="showRegister" class="text-green-400 hover:underline font-medium">Register</button>
+                </p>
+            </form>
+
+            <!-- Register Form -->
+            <form id="registerForm" class="hidden space-y-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Email</label>
+                    <input type="email" id="regEmail" required
+                           class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-green-500">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Password</label>
+                    <input type="password" id="regPassword" required minlength="6"
+                           class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-green-500">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Confirm Password</label>
+                    <input type="password" id="regConfirmPassword" required
+                           class="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-green-500">
+                </div>
+                <button type="submit" class="w-full bg-green-600 text-black font-bold py-2 rounded-lg hover:bg-green-500 transition-colors">
+                    Create Account
+                </button>
+                <p class="text-center text-sm text-gray-400">
+                    Already have an account? 
+                    <button type="button" id="showLogin" class="text-green-400 hover:underline font-medium">Login</button>
+                </p>
+            </form>
+        </div>
+    </div>
+
+</body>
+</html>
