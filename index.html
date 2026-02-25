@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MEME MEDIA | The Future of Meme Finance</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    
+    <script>
+        // ==========================================
+        // FIREBASE CONFIGURATION - REPLACE WITH YOUR OWN
+        // ==========================================
+    const firebaseConfig = {
+  apiKey: "AIzaSyDJUuShTLtA7vo2P67KX425ySL1lJ4Q_lo",
+  authDomain: "mememedia-832af.firebaseapp.com",
+  projectId: "mememedia-832af",
+  storageBucket: "mememedia-832af.firebasestorage.app",
+  messagingSenderId: "1014463566582",
+  appId: "1:1014463566582:web:65e563f4f0f787626852d7"
+};
+        
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.firestore();
+        const auth = firebase.auth();
+        
+        window.app = {
+            data: {
+                currentUser: null,
+                users: [],
+                posts: [],
+                currentTab: 'all',
+                currentCategory: 'All',
+                searchQuery: '',
+                authMode: 'login',
+                verificationCode: null,
+                codeExpiry: null,
+                view: 'home',
+                profileViewUser: null,
+                codeDisplayTimeout: null,
+                expandedComments: new Set(),
+                unsubscribePosts: null,
+                unsubscribeUsers: null
+            },
+
+            admins: ['cryptomax172003@gmail.com'],
+
+            async init() {
+                console.log('App initializing...');
+                this.setupEventListeners();
+                await this.checkAuth();
+                this.render();
+                console.log('App initialized successfully');
+            },
+
+            // ==========================================
+            // REAL-TIME DATA SYNC WITH FIREBASE
+            // ==========================================
+            
+            setupRealtimeListeners() {
+                // Real-time posts listener
+                this.data.unsubscribePosts = db.collection('posts')
+                    .orderBy('timestamp', 'desc')
+                    .onSnapshot((snapshot) => {
+                        this.data.posts = [];
+                        snapshot.forEach((doc) => {
+                            this.data.posts.push({ id: doc.id, ...doc.data() });
+                        });
+                        console.log('Posts updated:', this.data.posts.length);
+                        this.renderPosts();
+                    }, (error) => {
+                        console.error('Posts listener error:', error);
+                    });
+
+                // Real-time users listener
+                this.data.unsubscribeUsers = db.collection('users')
+                    .onSnapshot((snapshot) => {
+                        this.data.users = [];
+                        snapshot.forEach((doc) => {
+                            this.data.users.push({ email: doc.id, ...doc.data() });
+                        });
+                        console.log('Users updated:', this.data.users.length);
+                        if (this.data.view === 'profile') {
+                            this.renderProfile(this.data.profileViewUser);
+                        }
+                    }, (error) => {
+                        console.error('Users listener error:', error);
+                    });
+            },
+
+            stopRealtimeListeners() {
+                if (this.data.unsubscribePosts) {
+                    this.data.unsubscribePosts();
+                }
+                if (this.data.unsubscribeUsers) {
+                    this.data.unsubscribeUsers();
+                }
+            },
+
+            // ==========================================
+            // AUTHENTICATION
+            // ==========================================
+            
+            async checkAuth() {
+                auth.onAuthStateChanged(async (user) => {
+                    if (user) {
+                        // Get user data from Firestore
+                        const userDoc = await db.collection('users').doc(user.email).get();
+                        if (userDoc.exists) {
+                            this.data.currentUser = { email: user.email, ...userDoc.data() };
+                            this.setupRealtimeListeners();
+                        }
+                    } else {
+                        this.data.currentUser = null;
+                        this.stopRealtimeListeners();
+                        this.data.posts = [];
+                        this.data.users = [];
+                    }
+                    this.updateAuthUI();
+                    this.renderPosts();
+                });
+            },
+
+            // ==========================================
+            // NAVIGATION
+            // ==========================================
+            
+            navigate(viewName, param = null) {
+                console.log('Navigating to:', viewName);
+                this.data.view = viewName;
+                
+                const views = ['homeView', 'createPostView', 'profileView', 'searchUserView', 'followersView'];
+                views.forEach(v => {
+                    const el = document.getElementById(v);
+                    if (el) el.classList.add('hidden');
+                });
+
+                const viewMap = {
+                    'home': 'homeView',
+                    'create': 'createPostView',
+                    'profile': 'profileView',
+                    'search': 'searchUserView',
+                    'followers': 'followersView'
+                };
+
+                const targetView = document.getElementById(viewMap[viewName]);
+                if (targetView) {
+                    targetView.classList.remove('hidden');
+                }
+
+                if (viewName === 'home') {
+                    this.renderPosts();
+                } else if (viewName === 'create') {
+                    this.setupCreatePost();
+                } else if (viewName === 'profile') {
+                    this.renderProfile(param);
+                } else if (viewName === 'followers') {
+                    this.renderFollowersList(param);
+                }
+                
+                window.scrollTo(0, 0);
+            },
+
+            setupCreatePost() {
+                const postTypeSection = document.getElementById('postTypeSection');
+                if (postTypeSection) {
+                    if (this.data.currentUser && this.admins.includes(this.data.currentUser.email)) {
+                        postTypeSection.classList.remove('hidden');
+                    } else {
+                        postTypeSection.classList.add('hidden');
+                    }
+                }
+            },
+
+            switchTab(tab) {
+                this.data.currentTab = tab;
+                
+                const allBtn = document.getElementById('tab-all');
+                const topBtn = document.getElementById('tab-top');
+                const controls = document.getElementById('allNewsControls');
+
+                if (tab === 'all') {
+                    allBtn?.classList.add('bg-green-500/10', 'text-green-400', 'border-green-500/30');
+                    allBtn?.classList.remove('bg-gray-900', 'text-gray-400', 'border-gray-700');
+                    
+                    topBtn?.classList.remove('bg-pink-500/10', 'text-pink-400', 'border-pink-500/30');
+                    topBtn?.classList.add('bg-gray-900', 'text-gray-400', 'border-gray-700');
+                    
+                    controls?.classList.remove('hidden');
+                } else {
+                    topBtn?.classList.add('bg-pink-500/10', 'text-pink-400', 'border-pink-500/30');
+                    topBtn?.classList.remove('bg-gray-900', 'text-gray-400', 'border-gray-700');
+                    
+                    allBtn?.classList.remove('bg-green-500/10', 'text-green-400', 'border-green-500/30');
+                    allBtn?.classList.add('bg-gray-900', 'text-gray-400', 'border-gray-700');
+                    
+                    controls?.classList.add('hidden');
+                }
+                this.renderPosts();
+            },
+
+            setCategory(cat) {
+                this.data.currentCategory = cat;
+                
+                document.querySelectorAll('.category-pill').forEach(btn => {
+                    const btnText = btn.innerText.replace(/[^\w\s]/g, '').trim();
+                    if ((cat === 'All' && btnText === 'All') || btnText === cat) {
+                        btn.classList.add('active');
+                    } else {
+                        btn.classList.remove('active');
+                    }
+                });
+                this.renderPosts();
+            },
+
+            filterPosts() {
+                const searchInput = document.getElementById('searchInput');
+                this.data.searchQuery = searchInput ? searchInput.value.toLowerCase() : '';
+                this.renderPosts();
+            },
+
+            toggleComments(postId) {
+                if (this.data.expandedComments.has(postId)) {
+                    this.data.expandedComments.delete(postId);
+                } else {
+                    this.data.expandedComments.add(postId);
+                }
+                this.renderPosts();
+            },
+
+            formatCommentText(text) {
+                return text.replace(/@(\w+)/g, '<span class="text-blue-400 font-bold hover:underline cursor-pointer">@$1</span>');
+            },
+
+            // ==========================================
+            // POSTS RENDERING
+            // ==========================================
+            
+            renderPosts() {
+                const container = document.getElementById('postsContainer');
+                if (!container) return;
+                
+                container.innerHTML = '';
+
+                let filtered = [...this.data.posts];
+
+                if (this.data.currentTab === 'top') {
+                    filtered = filtered.filter(p => p.type === 'top');
+                }
+
+                if (this.data.currentTab === 'all' && this.data.currentCategory !== 'All') {
+                    filtered = filtered.filter(p => p.category === this.data.currentCategory);
+                }
+
+                if (this.data.searchQuery) {
+                    filtered = filtered.filter(p => 
+                        p.title?.toLowerCase().includes(this.data.searchQuery) || 
+                        p.content?.toLowerCase().includes(this.data.searchQuery)
+                    );
+                }
+
+                if (filtered.length === 0) {
+                    container.innerHTML = `
+                        <div class="col-span-full text-center py-12">
+                            <div class="text-gray-500 mb-4">No posts found</div>
+                            ${this.data.currentUser ? `
+                            <button onclick="window.app.navigate('create')" class="bg-green-600 text-black px-6 py-2 rounded-lg font-bold hover:bg-green-500 transition-colors">
+                                Create First Post
+                            </button>` : '<p class="text-sm text-gray-600">Login to create posts</p>'}
+                        </div>
+                    `;
+                    return;
+                }
+
+                filtered.forEach(post => {
+                    const isAdmin = this.admins.includes(post.author);
+                    const isAuthor = this.data.currentUser && this.data.currentUser.email === post.author;
+                    const canDelete = isAdmin || isAuthor;
+                    
+                    let userLikeStatus = 'none';
+                    if (this.data.currentUser) {
+                        if (post.likesList?.includes(this.data.currentUser.email)) userLikeStatus = 'like';
+                        if (post.dislikesList?.includes(this.data.currentUser.email)) userLikeStatus = 'dislike';
+                    }
+
+                    const card = document.createElement('div');
+                    card.className = 'glass-panel rounded-xl overflow-hidden border border-gray-800 hover:border-green-500/50 transition-all duration-300 flex flex-col';
+                    
+                    const allComments = post.comments || [];
+                    const isExpanded = this.data.expandedComments.has(post.id);
+                    const displayedComments = isExpanded ? allComments : allComments.slice(0, 3);
+                    const hasMoreComments = allComments.length > 3;
+                    
+                    let commentsHtml = '';
+                    if (allComments.length > 0) {
+                        const commentsList = displayedComments.map(c => `
+                            <div class="text-xs text-gray-400 mb-1">
+                                <span class="text-green-400 font-bold cursor-pointer hover:underline" 
+                                      onclick="window.app.navigate('profile', '${this.getUserEmailByTag(c.user)}')">@${c.user}</span>: 
+                                <span>${this.formatCommentText(c.text)}</span>
+                            </div>
+                        `).join('');
+                        
+                        const readMoreBtn = hasMoreComments ? `
+                            <button onclick="window.app.toggleComments('${post.id}')" class="text-xs text-blue-400 hover:text-blue-300 mb-2 font-medium">
+                                ${isExpanded ? 'Read Less ↑' : `Read More (${allComments.length - 3} more) ↓`}
+                            </button>
+                        ` : '';
+                        
+                        commentsHtml = `<div class="mt-3 pt-3 border-t border-gray-700 space-y-1">
+                            ${readMoreBtn}
+                            ${commentsList}
+                        </div>`;
+                    }
+                    
+                    card.innerHTML = `
+                        ${post.image ? `
+                        <div class="h-48 overflow-hidden relative group">
+                            <img src="${post.image}" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" 
+                                 onerror="this.src='https://via.placeholder.com/800x400?text=Meme+Media'">
+                            <div class="absolute top-2 right-2 bg-black/70 backdrop-blur px-2 py-1 rounded text-xs font-bold text-green-400 border border-green-500/30">
+                                ${post.category}
+                            </div>
+                            ${post.type === 'top' ? `<div class="absolute top-2 left-2 bg-pink-600 text-white px-2 py-1 rounded text-xs font-bold shadow-lg shadow-pink-500/20"><i class="fa-solid fa-crown"></i> TOP</div>` : ''}
+                        </div>` : ''}
+                        
+                        <div class="p-5 flex-grow flex flex-col">
+                            <div class="flex justify-between items-start mb-2">
+                                <h3 class="text-xl font-bold text-white leading-tight hover:text-green-400 cursor-pointer" 
+                                    onclick="window.app.navigate('profile', '${post.author}')">${post.title}</h3>
+                            </div>
+                            
+                            <div class="flex items-center gap-2 mb-3 text-xs text-gray-400">
+                                <span class="text-green-400 font-mono cursor-pointer hover:underline" 
+                                      onclick="window.app.navigate('profile', '${post.author}')">@${post.authorTag}</span>
+                                <span>•</span>
+                                <span>${new Date(post.timestamp).toLocaleDateString()}</span>
+                            </div>
+
+                            <p class="text-gray-300 text-sm mb-4 line-clamp-3 flex-grow">${post.content}</p>
+                            
+                            <div class="flex items-center justify-between pt-4 border-t border-gray-800 mt-auto">
+                                <div class="flex gap-4">
+                                    <button onclick="window.app.handleVote('${post.id}', 'like')" 
+                                            class="flex items-center gap-1 text-sm ${userLikeStatus === 'like' ? 'text-green-400' : 'text-gray-500 hover:text-green-400'} transition-colors">
+                                        <i class="fa-solid fa-arrow-up"></i> ${post.likes || 0}
+                                    </button>
+                                    <button onclick="window.app.handleVote('${post.id}', 'dislike')" 
+                                            class="flex items-center gap-1 text-sm ${userLikeStatus === 'dislike' ? 'text-red-400' : 'text-gray-500 hover:text-red-400'} transition-colors">
+                                        <i class="fa-solid fa-arrow-down"></i> ${post.dislikes || 0}
+                                    </button>
+                                    <button onclick="window.app.showCommentModal('${post.id}')" 
+                                            class="flex items-center gap-1 text-sm text-gray-500 hover:text-blue-400 transition-colors">
+                                        <i class="fa-solid fa-comment"></i> ${post.comments?.length || 0}
+                                    </button>
+                                </div>
+                                ${canDelete ? `
+                                <button onclick="window.app.deletePost('${post.id}')" class="text-gray-600 hover:text-red-500 transition-colors text-xs">
+                                    <i class="fa-solid fa-trash"></i> Delete
+                                </button>` : ''}
+                            </div>
+                            ${commentsHtml}
+                        </div>
+                    `;
+                    container.appendChild(card);
+                });
+            },
+
+            getUserEmailByTag(tag) {
+                const user = this.data.users.find(u => u.tag === tag);
+                return user ? user.email : '';
+            },
+
+            // ==========================================
+            // POST ACTIONS
+            // ==========================================
+            
+            async handleNewPostClick() {
+                if (!this.data.currentUser) {
+                    this.showToast('Please login to create a post', 'error');
+                    this.toggleAuthModal();
+                    return;
+                }
+                
+                const userDoc = await db.collection('users').doc(this.data.currentUser.email).get();
+                const userData = userDoc.data();
+                const today = new Date().toDateString();
+                
+                if (!this.admins.includes(this.data.currentUser.email)) {
+                    if (userData.lastPostDate === today && userData.postsToday >= 3) {
+                        this.showToast('Daily post limit reached (3/3)', 'error');
+                        return;
+                    }
+                }
+
+                this.navigate('create');
+            },
+
+            async submitPost(e) {
+                e.preventDefault();
+                const form = e.target;
+                
+                if (!this.data.currentUser) {
+                    this.showToast('Please login first', 'error');
+     
