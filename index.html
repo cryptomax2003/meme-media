@@ -1,171 +1,1037 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MEME MEDIA</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MEME MEDIA | The Future of Meme Finance</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- CRITICAL: JavaScript loaded in HEAD with defer -->
+    <script>
+        // Initialize app immediately
+        window.app = {
+            data: {
+                currentUser: null,
+                users: [],
+                posts: [],
+                currentTab: 'all',
+                currentCategory: 'All',
+                searchQuery: '',
+                authMode: 'login',
+                verificationCode: null,
+                codeExpiry: null,
+                view: 'home',
+                profileViewUser: null
+            },
 
-<style>
-body { background:#050505; color:#e0e0e0; font-family:sans-serif; }
-.hidden { display:none; }
-.glass { background:rgba(20,20,20,0.7); backdrop-filter:blur(10px); }
-</style>
+            admins: ['cryptomax172003@gmail.com'],
+
+            init() {
+                console.log('App initializing...');
+                this.loadData();
+                this.setupEventListeners();
+                this.render();
+                console.log('App initialized successfully');
+            },
+
+            loadData() {
+                console.log('Loading data...');
+                if (this.data.posts.length === 0) {
+                    this.data.posts = [
+                        {
+                            id: 1,
+                            title: "PEPE Coin Breaks Resistance!",
+                            content: "Technical analysis shows a clear breakout pattern. Expecting 2x in the next 24h. NFA.",
+                            category: "Moonshots",
+                            author: "cryptomax172003@gmail.com",
+                            authorTag: "CryptoMax",
+                            image: "https://images.unsplash.com/photo-1621761191319-c6fb62004040?w=800&q=80",
+                            likes: 42,
+                            dislikes: 2,
+                            comments: [],
+                            timestamp: Date.now() - 100000,
+                            type: 'top',
+                            likesList: [],
+                            dislikesList: []
+                        },
+                        {
+                            id: 2,
+                            title: "Rug Pull Warning: DOGE2.0",
+                            content: "Liquidity locked for only 1 day. Dev wallet moving funds. Stay safe out there.",
+                            category: "Rug Alerts",
+                            author: "user1@test.com",
+                            authorTag: "Watcher",
+                            image: "https://images.unsplash.com/photo-1621504450168-b8c4375443a2?w=800&q=80",
+                            likes: 156,
+                            dislikes: 0,
+                            comments: [{user: 'anon', text: 'Thanks for the heads up!'}],
+                            timestamp: Date.now() - 200000,
+                            type: 'all',
+                            likesList: [],
+                            dislikesList: []
+                        }
+                    ];
+                    
+                    this.data.users.push({
+                        email: 'cryptomax172003@gmail.com',
+                        tag: 'CryptoMax',
+                        pic: 'https://ui-avatars.com/api/?name=CM&background=10b981&color=fff',
+                        following: [],
+                        followers: [],
+                        lastPostDate: null,
+                        postsToday: 0
+                    });
+                }
+                console.log('Data loaded:', this.data.posts.length, 'posts');
+            },
+
+            navigate(viewName, param = null) {
+                console.log('Navigating to:', viewName);
+                this.data.view = viewName;
+                
+                const homeView = document.getElementById('homeView');
+                const createView = document.getElementById('createPostView');
+                const profileView = document.getElementById('profileView');
+                
+                if (homeView) homeView.classList.add('hidden');
+                if (createView) createView.classList.add('hidden');
+                if (profileView) profileView.classList.add('hidden');
+
+                if (viewName === 'home' && homeView) {
+                    homeView.classList.remove('hidden');
+                    this.renderPosts();
+                } else if (viewName === 'create' && createView) {
+                    createView.classList.remove('hidden');
+                } else if (viewName === 'profile' && profileView) {
+                    profileView.classList.remove('hidden');
+                    this.renderProfile(param);
+                }
+                
+                window.scrollTo(0,0);
+            },
+
+            switchTab(tab) {
+                console.log('Switching tab to:', tab);
+                this.data.currentTab = tab;
+                
+                const allBtn = document.getElementById('tab-all');
+                const topBtn = document.getElementById('tab-top');
+                const controls = document.getElementById('allNewsControls');
+
+                if (!allBtn || !topBtn) return;
+
+                if (tab === 'all') {
+                    allBtn.classList.add('bg-green-500/10', 'text-green-400', 'border-green-500/30');
+                    allBtn.classList.remove('bg-gray-900', 'text-gray-400', 'border-gray-700');
+                    
+                    topBtn.classList.remove('bg-pink-500/10', 'text-pink-400', 'border-pink-500/30');
+                    topBtn.classList.add('bg-gray-900', 'text-gray-400', 'border-gray-700');
+                    
+                    if (controls) controls.classList.remove('hidden');
+                } else {
+                    topBtn.classList.add('bg-pink-500/10', 'text-pink-400', 'border-pink-500/30');
+                    topBtn.classList.remove('bg-gray-900', 'text-gray-400', 'border-gray-700');
+                    
+                    allBtn.classList.remove('bg-green-500/10', 'text-green-400', 'border-green-500/30');
+                    allBtn.classList.add('bg-gray-900', 'text-gray-400', 'border-gray-700');
+                    
+                    if (controls) controls.classList.add('hidden');
+                }
+                this.renderPosts();
+            },
+
+            setCategory(cat) {
+                console.log('Setting category:', cat);
+                this.data.currentCategory = cat;
+                
+                document.querySelectorAll('.category-pill').forEach(btn => {
+                    const btnText = btn.innerText.replace(/[^\w\s]/g, '').trim();
+                    if((cat === 'All' && btnText === 'All') || btnText === cat) {
+                        btn.classList.add('active');
+                    } else {
+                        btn.classList.remove('active');
+                    }
+                });
+                this.renderPosts();
+            },
+
+            filterPosts() {
+                const searchInput = document.getElementById('searchInput');
+                this.data.searchQuery = searchInput ? searchInput.value.toLowerCase() : '';
+                console.log('Filtering posts:', this.data.searchQuery);
+                this.renderPosts();
+            },
+
+            renderPosts() {
+                console.log('Rendering posts...');
+                const container = document.getElementById('postsContainer');
+                if (!container) {
+                    console.error('postsContainer not found!');
+                    return;
+                }
+                
+                container.innerHTML = '';
+
+                let filtered = this.data.posts;
+
+                if (this.data.currentTab === 'top') {
+                    filtered = filtered.filter(p => p.type === 'top' || this.admins.includes(p.author));
+                }
+
+                if (this.data.currentTab === 'all' && this.data.currentCategory !== 'All') {
+                    filtered = filtered.filter(p => p.category === this.data.currentCategory);
+                }
+
+                if (this.data.searchQuery) {
+                    filtered = filtered.filter(p => 
+                        p.title.toLowerCase().includes(this.data.searchQuery) || 
+                        p.content.toLowerCase().includes(this.data.searchQuery)
+                    );
+                }
+
+                filtered.sort((a, b) => b.timestamp - a.timestamp);
+
+                if (filtered.length === 0) {
+                    container.innerHTML = `
+                        <div class="col-span-full text-center py-12">
+                            <div class="text-gray-500 mb-4">No posts found</div>
+                            <button onclick="window.app.navigate('create')" class="bg-green-600 text-black px-6 py-2 rounded-lg font-bold hover:bg-green-500 transition-colors">
+                                Create First Post
+                            </button>
+                        </div>
+                    `;
+                    return;
+                }
+
+                filtered.forEach(post => {
+                    const isAdmin = this.admins.includes(post.author);
+                    const isAuthor = this.data.currentUser && this.data.currentUser.email === post.author;
+                    const canDelete = isAdmin || isAuthor;
+                    
+                    let userLikeStatus = 'none';
+                    if (this.data.currentUser) {
+                        if (post.likesList && post.likesList.includes(this.data.currentUser.email)) userLikeStatus = 'like';
+                        if (post.dislikesList && post.dislikesList.includes(this.data.currentUser.email)) userLikeStatus = 'dislike';
+                    }
+
+                    const card = document.createElement('div');
+                    card.className = 'glass-panel rounded-xl overflow-hidden border border-gray-800 hover:border-green-500/50 transition-all duration-300 flex flex-col';
+                    
+                    card.innerHTML = `
+                        ${post.image ? `
+                        <div class="h-48 overflow-hidden relative group">
+                            <img src="${post.image}" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" onerror="this.src='https://via.placeholder.com/800x400?text=Meme+Media'">
+                            <div class="absolute top-2 right-2 bg-black/70 backdrop-blur px-2 py-1 rounded text-xs font-bold text-green-400 border border-green-500/30">
+                                ${post.category}
+                            </div>
+                            ${post.type === 'top' || isAdmin ? `<div class="absolute top-2 left-2 bg-pink-600 text-white px-2 py-1 rounded text-xs font-bold shadow-lg shadow-pink-500/20"><i class="fa-solid fa-crown"></i> TOP</div>` : ''}
+                        </div>` : ''}
+                        
+                        <div class="p-5 flex-grow flex flex-col">
+                            <div class="flex justify-between items-start mb-2">
+                                <h3 class="text-xl font-bold text-white leading-tight hover:text-green-400 cursor-pointer" onclick="window.app.navigate('profile', '${post.author}')">${post.title}</h3>
+                            </div>
+                            
+                            <div class="flex items-center gap-2 mb-3 text-xs text-gray-400">
+                                <span class="text-green-400 font-mono cursor-pointer hover:underline" onclick="window.app.navigate('profile', '${post.author}')">@${post.authorTag}</span>
+                                <span>•</span>
+                                <span>${new Date(post.timestamp).toLocaleDateString()}</span>
+                            </div>
+
+                            <p class="text-gray-300 text-sm mb-4 line-clamp-3 flex-grow">${post.content}</p>
+                            
+                            <div class="flex items-center justify-between pt-4 border-t border-gray-800 mt-auto">
+                                <div class="flex gap-4">
+                                    <button onclick="window.app.handleVote(${post.id}, 'like')" class="flex items-center gap-1 text-sm ${userLikeStatus === 'like' ? 'text-green-400' : 'text-gray-500 hover:text-green-400'} transition-colors">
+                                        <i class="fa-solid fa-arrow-up"></i> ${post.likes || 0}
+                                    </button>
+                                    <button onclick="window.app.handleVote(${post.id}, 'dislike')" class="flex items-center gap-1 text-sm ${userLikeStatus === 'dislike' ? 'text-red-400' : 'text-gray-500 hover:text-red-400'} transition-colors">
+                                        <i class="fa-solid fa-arrow-down"></i> ${post.dislikes || 0}
+                                    </button>
+                                    <button class="flex items-center gap-1 text-sm text-gray-500 hover:text-blue-400 transition-colors">
+                                        <i class="fa-solid fa-comment"></i> ${post.comments ? post.comments.length : 0}
+                                    </button>
+                                </div>
+                                ${canDelete ? `
+                                <button onclick="window.app.deletePost(${post.id})" class="text-gray-600 hover:text-red-500 transition-colors text-xs">
+                                    <i class="fa-solid fa-trash"></i> Delete
+                                </button>` : ''}
+                            </div>
+                        </div>
+                    `;
+                    container.appendChild(card);
+                });
+            },
+
+            handleNewPostClick() {
+                console.log('New Post clicked');
+                if (!this.data.currentUser) {
+                    this.showToast('Please login to create a post', 'error');
+                    this.toggleAuthModal();
+                    return;
+                }
+                
+                const user = this.data.users.find(u => u.email === this.data.currentUser.email);
+                const today = new Date().toDateString();
+                
+                if (!this.admins.includes(user.email)) {
+                    if (user.lastPostDate === today && user.postsToday >= 3) {
+                        this.showToast('Daily post limit reached (3/3)', 'error');
+                        return;
+                    }
+                }
+
+                this.navigate('create');
+            },
+
+            submitPost(e) {
+                e.preventDefault();
+                console.log('Submitting post...');
+                const form = e.target;
+                const user = this.data.users.find(u => u.email === this.data.currentUser.email);
+                
+                const today = new Date().toDateString();
+                if (!this.admins.includes(user.email)) {
+                    if (user.lastPostDate === today && user.postsToday >= 3) {
+                        this.showToast('Limit reached', 'error');
+                        return;
+                    }
+                }
+
+                const newPost = {
+                    id: Date.now(),
+                    title: form.title.value,
+                    content: form.content.value,
+                    category: form.category.value,
+                    image: form.imageUrl.value,
+                    author: user.email,
+                    authorTag: user.tag,
+                    likes: 0,
+                    dislikes: 0,
+                    likesList: [],
+                    dislikesList: [],
+                    comments: [],
+                    timestamp: Date.now(),
+                    type: 'all'
+                };
+
+                this.data.posts.unshift(newPost);
+                
+                if (user.lastPostDate !== today) {
+                    user.lastPostDate = today;
+                    user.postsToday = 0;
+                }
+                user.postsToday++;
+                
+                this.showToast('Post published successfully!');
+                this.navigate('home');
+            },
+
+            deletePost(id) {
+                if(confirm('Are you sure you want to delete this post?')) {
+                    this.data.posts = this.data.posts.filter(p => p.id !== id);
+                    this.renderPosts();
+                    this.showToast('Post deleted');
+                }
+            },
+
+            handleVote(postId, type) {
+                console.log('Voting:', postId, type);
+                if (!this.data.currentUser) {
+                    this.showToast('Login to vote', 'error');
+                    return;
+                }
+
+                const post = this.data.posts.find(p => p.id === postId);
+                const userEmail = this.data.currentUser.email;
+
+                if (!post.likesList) post.likesList = [];
+                if (!post.dislikesList) post.dislikesList = [];
+
+                const hasLiked = post.likesList.includes(userEmail);
+                const hasDisliked = post.dislikesList.includes(userEmail);
+
+                if (type === 'like') {
+                    if (hasLiked) {
+                        post.likesList = post.likesList.filter(e => e !== userEmail);
+                        post.likes--;
+                    } else {
+                        post.likesList.push(userEmail);
+                        post.likes++;
+                        if (hasDisliked) {
+                            post.dislikesList = post.dislikesList.filter(e => e !== userEmail);
+                            post.dislikes--;
+                        }
+                    }
+                } else if (type === 'dislike') {
+                    if (hasDisliked) {
+                        post.dislikesList = post.dislikesList.filter(e => e !== userEmail);
+                        post.dislikes--;
+                    } else {
+                        post.dislikesList.push(userEmail);
+                        post.dislikes++;
+                        if (hasLiked) {
+                            post.likesList = post.likesList.filter(e => e !== userEmail);
+                            post.likes--;
+                        }
+                    }
+                }
+                this.renderPosts();
+            },
+
+            renderProfile(targetEmail) {
+                const email = targetEmail || (this.data.currentUser ? this.data.currentUser.email : null);
+                
+                if (!email) {
+                    this.showToast('Please login to view profiles', 'error');
+                    this.navigate('home');
+                    return;
+                }
+
+                const user = this.data.users.find(u => u.email === email);
+                if (!user) return;
+
+                const profileName = document.getElementById('profileName');
+                const profileTag = document.getElementById('profileTag');
+                const profileImage = document.getElementById('profileImage');
+                const profilePostsCount = document.getElementById('profilePostsCount');
+                const profileFollowers = document.getElementById('profileFollowers');
+                const profileFollowing = document.getElementById('profileFollowing');
+                const editSection = document.getElementById('editProfileSection');
+                const followBtn = document.getElementById('followBtn');
+                const userPostsContainer = document.getElementById('userPostsContainer');
+
+                if (profileName) profileName.innerText = user.tag;
+                if (profileTag) profileTag.innerText = user.email;
+                if (profileImage) profileImage.src = user.pic || `https://ui-avatars.com/api/?name=${user.tag}&background=10b981&color=fff`;
+                
+                const userPosts = this.data.posts.filter(p => p.author === email);
+                if (profilePostsCount) profilePostsCount.innerText = userPosts.length;
+                if (profileFollowers) profileFollowers.innerText = user.followers ? user.followers.length : 0;
+                if (profileFollowing) profileFollowing.innerText = user.following ? user.following.length : 0;
+
+                if (this.data.currentUser && this.data.currentUser.email === email) {
+                    if (editSection) editSection.classList.remove('hidden');
+                    if (followBtn) followBtn.classList.add('hidden');
+                    const editTagInput = document.getElementById('editTagInput');
+                    const editPicInput = document.getElementById('editPicInput');
+                    if (editTagInput) editTagInput.value = user.tag;
+                    if (editPicInput) editPicInput.value = user.pic || '';
+                } else {
+                    if (editSection) editSection.classList.add('hidden');
+                    if (this.data.currentUser && followBtn) {
+                        followBtn.classList.remove('hidden');
+                        const currentUserData = this.data.users.find(u => u.email === this.data.currentUser.email);
+                        const isFollowing = currentUserData.following && currentUserData.following.includes(email);
+                        followBtn.innerText = isFollowing ? 'Unfollow' : 'Follow';
+                        followBtn.onclick = () => this.toggleFollow(email);
+                    } else if (followBtn) {
+                        followBtn.classList.add('hidden');
+                    }
+                }
+
+                if (userPostsContainer) {
+                    userPostsContainer.innerHTML = '';
+                    if (userPosts.length === 0) {
+                        userPostsContainer.innerHTML = `<div class="col-span-full text-center text-gray-500">No posts yet.</div>`;
+                    } else {
+                        userPosts.forEach(post => {
+                            const div = document.createElement('div');
+                            div.className = 'glass-panel p-4 rounded-lg border border-gray-800';
+                            div.innerHTML = `
+                                <h4 class="font-bold text-white mb-1">${post.title}</h4>
+                                <p class="text-xs text-gray-400 mb-2">${post.category} • ${new Date(post.timestamp).toLocaleDateString()}</p>
+                                <p class="text-sm text-gray-300 line-clamp-2">${post.content}</p>
+                            `;
+                            userPostsContainer.appendChild(div);
+                        });
+                    }
+                }
+            },
+
+            saveProfile() {
+                if (!this.data.currentUser) return;
+                const user = this.data.users.find(u => u.email === this.data.currentUser.email);
+                const editTagInput = document.getElementById('editTagInput');
+                const editPicInput = document.getElementById('editPicInput');
+                
+                const newTag = editTagInput ? editTagInput.value : '';
+                const newPic = editPicInput ? editPicInput.value : '';
+
+                if (newTag !== user.tag) {
+                    const exists = this.data.users.some(u => u.tag === newTag);
+                    if (exists) {
+                        this.showToast('User tag already taken', 'error');
+                        return;
+                    }
+                }
+
+                user.tag = newTag;
+                user.pic = newPic;
+                this.data.currentUser = { ...user };
+                
+                this.showToast('Profile updated!');
+                this.renderProfile();
+            },
+
+            toggleFollow(targetEmail) {
+                if (!this.data.currentUser) return;
+                
+                const currentUser = this.data.users.find(u => u.email === this.data.currentUser.email);
+                const targetUser = this.data.users.find(u => u.email === targetEmail);
+
+                if (!currentUser.following) currentUser.following = [];
+                if (!targetUser.followers) targetUser.followers = [];
+
+                const index = currentUser.following.indexOf(targetEmail);
+                if (index === -1) {
+                    currentUser.following.push(targetEmail);
+                    targetUser.followers.push(currentUser.email);
+                    this.showToast(`You are now following ${targetUser.tag}`);
+                } else {
+                    currentUser.following.splice(index, 1);
+                    targetUser.followers = targetUser.followers.filter(e => e !== currentUser.email);
+                    this.showToast(`Unfollowed ${targetUser.tag}`);
+                }
+                
+                this.renderProfile(targetEmail);
+            },
+
+            toggleAuthModal() {
+                console.log('Toggling auth modal');
+                const modal = document.getElementById('authModal');
+                if (!modal) return;
+                
+                if (modal.classList.contains('hidden')) {
+                    modal.classList.remove('hidden');
+                    this.resetAuthForm();
+                } else {
+                    modal.classList.add('hidden');
+                }
+            },
+
+            switchAuthMode() {
+                this.data.authMode = this.data.authMode === 'login' ? 'register' : 'login';
+                const authTitle = document.getElementById('authTitle');
+                const authBtnText = document.getElementById('authBtnText');
+                const authSwitchText = document.getElementById('authSwitchText');
+                const authSwitchBtn = document.getElementById('authSwitchBtn');
+                
+                if (authTitle) authTitle.innerText = this.data.authMode === 'login' ? 'Login' : 'Register';
+                if (authBtnText) authBtnText.innerText = this.data.authMode === 'login' ? 'Request Code' : 'Request Code';
+                if (authSwitchText) authSwitchText.innerText = this.data.authMode === 'login' ? "Don't have an account?" : "Already have an account?";
+                if (authSwitchBtn) authSwitchBtn.innerText = this.data.authMode === 'login' ? 'Register' : 'Login';
+                
+                const verificationSection = document.getElementById('verificationSection');
+                if (verificationSection) verificationSection.classList.add('hidden');
+            },
+
+            resetAuthForm() {
+                const authForm = document.getElementById('authForm');
+                const verificationSection = document.getElementById('verificationSection');
+                
+                if (authForm) authForm.reset();
+                if (verificationSection) verificationSection.classList.add('hidden');
+                clearInterval(this.timerInterval);
+            },
+
+            requestCode() {
+                const authEmail = document.getElementById('authEmail');
+                const email = authEmail ? authEmail.value : '';
+                
+                if (!email) {
+                    this.showToast('Please enter email', 'error');
+                    return;
+                }
+
+                this.data.verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+                this.data.codeExpiry = Date.now() + 10 * 60 * 1000;
+
+                console.log(`Verification code for ${email}: ${this.data.verificationCode}`);
+                
+                const verificationSection = document.getElementById('verificationSection');
+                const authBtnText = document.getElementById('authBtnText');
+                
+                if (verificationSection) verificationSection.classList.remove('hidden');
+                if (authBtnText) authBtnText.innerText = this.data.authMode === 'login' ? 'Login' : 'Create Account';
+                
+                this.showToast(`Code: ${this.data.verificationCode} (check console)`);
+                this.startTimer();
+            },
+
+            startTimer() {
+                const timerDisplay = document.getElementById('timerDisplay');
+                clearInterval(this.timerInterval);
+                
+                this.timerInterval = setInterval(() => {
+                    const now = Date.now();
+                    const diff = this.data.codeExpiry - now;
+                    
+                    if (diff <= 0) {
+                        if (timerDisplay) {
+                            timerDisplay.innerText = "Expired";
+                            timerDisplay.classList.add('text-gray-600');
+                            timerDisplay.classList.remove('text-red-400');
+                        }
+                        clearInterval(this.timerInterval);
+                    } else {
+                        const mins = Math.floor(diff / 60000);
+                        const secs = Math.floor((diff % 60000) / 1000);
+                        if (timerDisplay) timerDisplay.innerText = `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+                    }
+                }, 1000);
+            },
+
+            handleAuth(e) {
+                e.preventDefault();
+                console.log('Handling auth...');
+                
+                const authEmail = document.getElementById('authEmail');
+                const authPassword = document.getElementById('authPassword');
+                const authCode = document.getElementById('authCode');
+                const verificationSection = document.getElementById('verificationSection');
+                
+                const email = authEmail ? authEmail.value : '';
+                const password = authPassword ? authPassword.value : '';
+                const code = authCode ? authCode.value : '';
+
+                if (verificationSection && verificationSection.classList.contains('hidden')) {
+                    this.requestCode();
+                    return;
+                }
+
+                if (code !== this.data.verificationCode || Date.now() > this.data.codeExpiry) {
+                    this.showToast('Invalid or expired code', 'error');
+                    return;
+                }
+
+                if (this.data.authMode === 'register') {
+                    if (this.data.users.some(u => u.email === email)) {
+                        this.showToast('Account already exists', 'error');
+                        return;
+                    }
+                    
+                    const newUser = {
+                        email: email,
+                        tag: email.split('@')[0],
+                        pic: '',
+                        following: [],
+                        followers: [],
+                        lastPostDate: null,
+                        postsToday: 0
+                    };
+                    this.data.users.push(newUser);
+                    this.data.currentUser = newUser;
+                    this.showToast('Account created successfully!');
+                } else {
+                    const user = this.data.users.find(u => u.email === email);
+                    if (!user) {
+                        this.showToast('User not found', 'error');
+                        return;
+                    }
+                    this.data.currentUser = user;
+                    this.showToast('Logged in successfully!');
+                }
+
+                this.updateAuthUI();
+                this.toggleAuthModal();
+                this.navigate('home');
+            },
+
+            updateAuthUI() {
+                const loginBtn = document.getElementById('loginBtn');
+                if (!loginBtn) return;
+                
+                if (this.data.currentUser) {
+                    loginBtn.innerText = 'Logout';
+                    loginBtn.onclick = () => {
+                        this.data.currentUser = null;
+                        this.updateAuthUI();
+                        this.showToast('Logged out');
+                        this.navigate('home');
+                    };
+                } else {
+                    loginBtn.innerText = 'Login';
+                    loginBtn.onclick = () => this.toggleAuthModal();
+                }
+            },
+
+            showToast(msg, type = 'success') {
+                console.log('Toast:', msg, type);
+                const toast = document.getElementById('toast');
+                const toastMsg = document.getElementById('toastMsg');
+                
+                if (!toast || !toastMsg) return;
+                
+                const icon = toast.querySelector('i');
+                
+                toastMsg.innerText = msg;
+                if (type === 'error') {
+                    toast.classList.replace('border-green-500', 'border-red-500');
+                    if (icon) icon.className = 'fa-solid fa-circle-exclamation text-red-500';
+                } else {
+                    toast.classList.replace('border-red-500', 'border-green-500');
+                    if (icon) icon.className = 'fa-solid fa-check-circle text-green-500';
+                }
+
+                toast.classList.remove('translate-y-20', 'opacity-0');
+                setTimeout(() => {
+                    toast.classList.add('translate-y-20', 'opacity-0');
+                }, 3000);
+            },
+            
+            setupEventListeners() {
+                document.addEventListener('keydown', (e) => {
+                    if (e.key === 'Escape') {
+                        const modal = document.getElementById('authModal');
+                        if (modal && !modal.classList.contains('hidden')) {
+                            this.toggleAuthModal();
+                        }
+                    }
+                });
+            },
+
+            render() {
+                this.renderPosts();
+            }
+        };
+
+        // Auto-initialize when DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => window.app.init());
+        } else {
+            window.app.init();
+        }
+    </script>
+    
+    <style>
+        body {
+            font-family: 'Space Grotesk', sans-serif;
+            background-color: #050505;
+            color: #e0e0e0;
+            overflow-x: hidden;
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f172a; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569; 
+        }
+
+        @keyframes float {
+            0% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+            100% { transform: translateY(0px); }
+        }
+        .animate-float {
+            animation: float 4s ease-in-out infinite;
+        }
+
+        @keyframes glow {
+            0% { box-shadow: 0 0 5px #10b981; }
+            50% { box-shadow: 0 0 20px #10b981, 0 0 10px #34d399; }
+            100% { box-shadow: 0 0 5px #10b981; }
+        }
+        .btn-glow:hover {
+            animation: glow 1.5s infinite alternate;
+        }
+
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .neon-text {
+            text-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
+        }
+        
+        .neon-text-pink {
+            text-shadow: 0 0 10px rgba(236, 72, 153, 0.5);
+        }
+
+        .chart-line {
+            stroke-dasharray: 1000;
+            stroke-dashoffset: 1000;
+            animation: drawChart 3s ease-out forwards;
+        }
+        @keyframes drawChart {
+            to { stroke-dashoffset: 0; }
+        }
+
+        .category-pill.active {
+            background-color: #10b981;
+            color: #000;
+            border-color: #10b981;
+            box-shadow: 0 0 15px rgba(16, 185, 129, 0.4);
+        }
+    </style>
 </head>
+<body class="min-h-screen flex flex-col relative">
 
-<body class="min-h-screen flex flex-col">
+    <!-- Background Elements -->
+    <div class="fixed inset-0 z-0 pointer-events-none overflow-hidden">
+        <div class="absolute inset-0 bg-[linear-gradient(to_right,#1f2937_1px,transparent_1px),linear-gradient(to_bottom,#1f2937_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)] opacity-20"></div>
+        
+        <div class="absolute top-20 left-10 opacity-10 animate-float" style="animation-delay: 0s;">
+            <svg width="100" height="100" viewBox="0 0 24 24" fill="#4ade80"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/></svg>
+        </div>
+        <div class="absolute bottom-40 right-10 opacity-10 animate-float" style="animation-delay: 2s;">
+            <svg width="150" height="150" viewBox="0 0 24 24" fill="#4ade80"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+        </div>
 
-<!-- NAV -->
-<nav class="fixed top-0 w-full bg-black border-b border-gray-800 z-50">
-<div class="max-w-6xl mx-auto px-4 h-16 flex justify-between items-center">
+        <div class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-[800px] h-[600px] opacity-20 pointer-events-none">
+            <div class="absolute bottom-0 left-1/2 transform -translate-x-1/2 w-[600px] h-[20px] bg-gray-800 rounded-b-xl border-t border-gray-600"></div>
+            <div class="absolute bottom-[20px] left-1/2 transform -translate-x-1/2 w-[500px] h-[300px] bg-gray-900 border-4 border-gray-700 rounded-t-lg overflow-hidden">
+                <div class="w-full h-full bg-black p-4 relative">
+                    <svg class="w-full h-full" viewBox="0 0 100 50" preserveAspectRatio="none">
+                        <path d="M0,50 L10,45 L20,48 L30,30 L40,35 L50,15 L60,20 L70,10 L80,12 L90,5 L100,0" 
+                              fill="none" stroke="#10b981" stroke-width="2" class="chart-line" />
+                        <path d="M0,50 L10,45 L20,48 L30,30 L40,35 L50,15 L60,20 L70,10 L80,12 L90,5 L100,0 L100,50 Z" 
+                              fill="url(#grad1)" opacity="0.2" />
+                        <defs>
+                            <linearGradient id="grad1" x1="0%" y1="0%" x2="0%" y2="100%">
+                                <stop offset="0%" style="stop-color:#10b981;stop-opacity:1" />
+                                <stop offset="100%" style="stop-color:#10b981;stop-opacity:0" />
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                    <div class="absolute top-2 left-2 w-20 h-2 bg-gray-800 rounded"></div>
+                    <div class="absolute top-2 right-2 w-8 h-2 bg-red-900 rounded"></div>
+                </div>
+            </div>
+        </div>
+    </div>
 
-<div class="text-green-400 font-bold text-xl cursor-pointer" onclick="app.navigate('home')">
-🚀 MEME<span class="text-white">MEDIA</span>
-</div>
+    <!-- Navigation -->
+    <nav class="fixed top-0 w-full z-50 glass-panel border-b border-gray-800">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <div class="flex items-center cursor-pointer" onclick="window.app.navigate('home')">
+                    <div class="flex-shrink-0 text-green-400 text-2xl font-bold tracking-tighter flex items-center gap-2">
+                        <i class="fa-solid fa-rocket"></i>
+                        <span>MEME<span class="text-white">MEDIA</span></span>
+                    </div>
+                </div>
+                <div class="hidden md:block">
+                    <div class="ml-10 flex items-baseline space-x-4">
+                        <button onclick="window.app.navigate('home')" class="hover:bg-gray-800 px-3 py-2 rounded-md text-sm font-medium transition-colors">Home</button>
+                        <button onclick="window.app.navigate('profile')" class="hover:bg-gray-800 px-3 py-2 rounded-md text-sm font-medium transition-colors">Profile</button>
+                    </div>
+                </div>
+                <div class="flex items-center gap-4">
+                    <button id="newPostBtn" onclick="window.app.handleNewPostClick()" class="bg-green-600 hover:bg-green-500 text-black font-bold py-2 px-4 rounded-lg transition-all transform hover:scale-105 btn-glow flex items-center gap-2">
+                        <i class="fa-solid fa-plus"></i> New Post
+                    </button>
+                    <button id="loginBtn" onclick="window.app.toggleAuthModal()" class="border border-green-500 text-green-400 hover:bg-green-500/10 px-4 py-2 rounded-lg transition-all">
+                        Login
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
 
-<div class="flex gap-4">
-<button onclick="app.navigate('home')" class="px-3 py-2 hover:bg-gray-800 rounded">Home</button>
-<button onclick="app.navigate('profile')" class="px-3 py-2 hover:bg-gray-800 rounded">Profile</button>
-<button onclick="app.navigate('create')" class="bg-green-600 px-4 py-2 rounded text-black font-bold">
-New Post
-</button>
-<button onclick="app.toggleAuth()" class="border border-green-500 px-4 py-2 rounded">
-Login
-</button>
-</div>
+    <!-- Main Content -->
+    <main class="flex-grow pt-24 pb-12 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full z-10 relative">
+        
+        <!-- Header Section -->
+        <div class="text-center mb-12 animate-float">
+            <h1 class="text-5xl md:text-7xl font-bold mb-4 tracking-tight">
+                <span class="text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-emerald-600 neon-text">$MEME</span>
+                <span class="text-white">MEDIA</span>
+            </h1>
+            <p class="text-gray-400 text-lg max-w-2xl mx-auto">The decentralized hub for memecoin intelligence, rug alerts, and alpha leaks.</p>
+        </div>
 
-</div>
-</nav>
+        <!-- VIEW: HOME (All News / Top News) -->
+        <div id="homeView" class="space-y-8">
+            <!-- Tabs -->
+            <div class="flex justify-center space-x-4 mb-8">
+                <button onclick="window.app.switchTab('all')" id="tab-all" class="px-8 py-3 rounded-full border border-green-500/30 bg-green-500/10 text-green-400 font-semibold transition-all hover:bg-green-500/20 active-tab">
+                    <i class="fa-solid fa-newspaper mr-2"></i> All News
+                </button>
+                <button onclick="window.app.switchTab('top')" id="tab-top" class="px-8 py-3 rounded-full border border-pink-500/30 bg-gray-900 text-gray-400 font-semibold transition-all hover:bg-pink-500/10 hover:text-pink-400">
+                    <i class="fa-solid fa-crown mr-2 text-yellow-500"></i> Top News
+                </button>
+            </div>
 
-<!-- MAIN -->
-<main class="pt-24 max-w-6xl mx-auto px-4 flex-grow">
+            <!-- Search & Filter (Only for All News) -->
+            <div id="allNewsControls" class="max-w-3xl mx-auto space-y-6">
+                <div class="relative">
+                    <input type="text" id="searchInput" placeholder="Search posts by keyword..." 
+                           class="w-full bg-gray-900/80 border border-gray-700 rounded-xl py-4 pl-12 pr-4 text-white focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500 transition-all"
+                           oninput="window.app.filterPosts()">
+                    <i class="fa-solid fa-search absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-500"></i>
+                </div>
 
-<!-- HOME VIEW -->
-<div id="homeView">
-<h1 class="text-4xl font-bold text-center mb-6 text-green-400">$MEME MEDIA</h1>
-<div id="posts" class="grid md:grid-cols-2 gap-6"></div>
-</div>
+                <!-- Categories -->
+                <div class="flex flex-wrap justify-center gap-3" id="categoryFilters">
+                    <button onclick="window.app.setCategory('All')" class="category-pill active px-4 py-2 rounded-full border border-gray-700 bg-gray-800 text-sm hover:border-green-500 transition-all">All</button>
+                    <button onclick="window.app.setCategory('Moonshots')" class="category-pill px-4 py-2 rounded-full border border-gray-700 bg-gray-800 text-sm hover:border-green-500 transition-all">🚀 Moonshots</button>
+                    <button onclick="window.app.setCategory('Rug Alerts')" class="category-pill px-4 py-2 rounded-full border border-gray-700 bg-gray-800 text-sm hover:border-green-500 transition-all">🚨 Rug Alerts</button>
+                    <button onclick="window.app.setCategory('Alpha')" class="category-pill px-4 py-2 rounded-full border border-gray-700 bg-gray-800 text-sm hover:border-green-500 transition-all">💎 Alpha</button>
+                    <button onclick="window.app.setCategory('Trends')" class="category-pill px-4 py-2 rounded-full border border-gray-700 bg-gray-800 text-sm hover:border-green-500 transition-all">📈 Trends</button>
+                </div>
+            </div>
 
-<!-- CREATE VIEW -->
-<div id="createView" class="hidden glass p-6 rounded-xl max-w-xl mx-auto">
-<h2 class="text-xl font-bold mb-4">Create Post</h2>
+            <!-- Posts Grid -->
+            <div id="postsContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-8">
+                <!-- Posts injected via JS -->
+            </div>
+        </div>
 
-<form onsubmit="app.addPost(event)">
-<input id="postTitle" required placeholder="Title"
-class="w-full p-2 mb-3 bg-black border border-gray-700 rounded">
+        <!-- VIEW: CREATE POST -->
+        <div id="createPostView" class="hidden max-w-2xl mx-auto glass-panel p-8 rounded-2xl border border-gray-700">
+            <h2 class="text-2xl font-bold text-white mb-6 flex items-center gap-2">
+                <i class="fa-solid fa-pen-nib text-green-400"></i> Create New Post
+            </h2>
+            <form onsubmit="window.app.submitPost(event)" class="space-y-6">
+                <div>
+                    <label class="block text-sm font-medium text-gray-400 mb-2">Title</label>
+                    <input type="text" name="title" required class="w-full bg-gray-900 border border-gray-700 rounded-lg p-3 text-white focus:border-green-500 focus:outline-none">
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-400 mb-2">Category</label>
+                    <select name="category" id="postCategorySelect" class="w-full bg-gray-900 border border-gray-700 rounded-lg p-3 text-white focus:border-green-500 focus:outline-none">
+                        <option value="Moonshots">🚀 Moonshots</option>
+                        <option value="Rug Alerts">🚨 Rug Alerts</option>
+                        <option value="Alpha">💎 Alpha</option>
+                        <option value="Trends">📈 Trends</option>
+                    </select>
+                </div>
 
-<textarea id="postContent" required placeholder="Content"
-class="w-full p-2 mb-3 bg-black border border-gray-700 rounded"></textarea>
+                <div>
+                    <label class="block text-sm font-medium text-gray-400 mb-2">Content</label>
+                    <textarea name="content" rows="5" required class="w-full bg-gray-900 border border-gray-700 rounded-lg p-3 text-white focus:border-green-500 focus:outline-none"></textarea>
+                </div>
 
-<button type="submit"
-class="w-full bg-green-600 py-2 rounded text-black font-bold">
-Publish
-</button>
-</form>
-</div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-400 mb-2">Image URL</label>
+                    <input type="url" name="imageUrl" placeholder="https://..." class="w-full bg-gray-900 border border-gray-700 rounded-lg p-3 text-white focus:border-green-500 focus:outline-none">
+                    <p class="text-xs text-gray-500 mt-1">Need an image host? Try <a href="https://imgur.com/" target="_blank" class="text-green-400 hover:underline">Imgur</a></p>
+                </div>
 
-<!-- PROFILE VIEW -->
-<div id="profileView" class="hidden text-center">
-<h2 class="text-3xl font-bold text-white">User Profile</h2>
-<p class="text-gray-400">Demo profile page</p>
-</div>
+                <div class="flex gap-4 pt-4">
+                    <button type="button" onclick="window.app.navigate('home')" class="flex-1 py-3 rounded-lg border border-gray-600 text-gray-300 hover:bg-gray-800 transition-colors">Cancel</button>
+                    <button type="submit" class="flex-1 py-3 rounded-lg bg-green-600 text-black font-bold hover:bg-green-500 transition-colors">Publish Post</button>
+                </div>
+            </form>
+        </div>
 
-</main>
+        <!-- VIEW: PROFILE -->
+        <div id="profileView" class="hidden max-w-4xl mx-auto">
+            <!-- Profile Header -->
+            <div class="glass-panel rounded-2xl p-8 mb-8 border border-gray-700 relative overflow-hidden">
+                <div class="absolute top-0 left-0 w-full h-24 bg-gradient-to-r from-green-900/50 to-blue-900/50"></div>
+                <div class="relative z-10 flex flex-col md:flex-row items-center md:items-end gap-6 mt-8">
+                    <div class="w-24 h-24 rounded-full bg-gray-800 border-4 border-gray-900 overflow-hidden flex-shrink-0">
+                        <img id="profileImage" src="https://ui-avatars.com/api/?name=User&background=10b981&color=fff" class="w-full h-full object-cover">
+                    </div>
+                    <div class="flex-grow text-center md:text-left">
+                        <h2 id="profileName" class="text-3xl font-bold text-white">User Name</h2>
+                        <p id="profileTag" class="text-green-400 font-mono">@usertag</p>
+                    </div>
+                    <div class="flex gap-4 text-center">
+                        <div>
+                            <div class="text-xl font-bold text-white" id="profilePostsCount">0</div>
+                            <div class="text-xs text-gray-400 uppercase tracking-wider">Posts</div>
+                        </div>
+                        <div>
+                            <div class="text-xl font-bold text-white" id="profileFollowers">0</div>
+                            <div class="text-xs text-gray-400 uppercase tracking-wider">Followers</div>
+                        </div>
+                        <div>
+                            <div class="text-xl font-bold text-white" id="profileFollowing">0</div>
+                            <div class="text-xs text-gray-400 uppercase tracking-wider">Following</div>
+                        </div>
+                    </div>
+                    <button id="followBtn" onclick="window.app.toggleFollow()" class="hidden px-6 py-2 rounded-full bg-white text-black font-bold hover:bg-gray-200 transition-colors">Follow</button>
+                </div>
+            </div>
 
-<!-- AUTH MODAL -->
-<div id="authModal"
-class="hidden fixed inset-0 bg-black/80 flex items-center justify-center">
+            <!-- Edit Profile (If own profile) -->
+            <div id="editProfileSection" class="glass-panel rounded-xl p-6 mb-8 border border-gray-700 hidden">
+                <h3 class="text-lg font-bold text-white mb-4">Edit Profile</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <input type="text" id="editTagInput" placeholder="Set unique user tag..." class="bg-gray-900 border border-gray-700 rounded-lg p-3 text-white">
+                    <input type="url" id="editPicInput" placeholder="Profile Picture URL..." class="bg-gray-900 border border-gray-700 rounded-lg p-3 text-white">
+                </div>
+                <button onclick="window.app.saveProfile()" class="mt-4 px-6 py-2 bg-green-600 text-black font-bold rounded-lg hover:bg-green-500">Save Changes</button>
+            </div>
 
-<div class="bg-gray-900 p-6 rounded-xl w-80">
-<h2 class="text-xl font-bold mb-4">Login</h2>
+            <!-- User Posts -->
+            <h3 class="text-xl font-bold text-white mb-4 border-l-4 border-green-500 pl-3">Posts</h3>
+            <div id="userPostsContainer" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- User posts injected here -->
+            </div>
+        </div>
 
-<form onsubmit="app.login(event)">
-<input required type="email" placeholder="Email"
-class="w-full p-2 mb-3 bg-black border border-gray-700 rounded">
+    </main>
 
-<input required type="password" placeholder="Password"
-class="w-full p-2 mb-3 bg-black border border-gray-700 rounded">
+    <!-- Auth Modal -->
+    <div id="authModal" class="fixed inset-0 z-[100] hidden">
+        <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" onclick="window.app.toggleAuthModal()"></div>
+        <div class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-full max-w-md p-1">
+            <div class="bg-gray-900 border border-gray-700 rounded-2xl p-8 shadow-2xl relative overflow-hidden">
+                <div class="absolute -top-10 -right-10 w-32 h-32 bg-green-500/20 rounded-full blur-3xl"></div>
 
-<button class="w-full bg-green-600 py-2 rounded text-black font-bold">
-Login
-</button>
-</form>
+                <div class="flex justify-between items-center mb-6">
+                    <h2 id="authTitle" class="text-2xl font-bold text-white">Login</h2>
+                    <button onclick="window.app.toggleAuthModal()" class="text-gray-400 hover:text-white"><i class="fa-solid fa-times"></i></button>
+                </div>
 
-<button onclick="app.toggleAuth()" class="mt-3 text-sm text-gray-400 w-full">
-Close
-</button>
+                <form id="authForm" onsubmit="window.app.handleAuth(event)" class="space-y-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Gmail Address</label>
+                        <input type="email" id="authEmail" required class="w-full bg-black border border-gray-700 rounded-lg p-3 text-white focus:border-green-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Password</label>
+                        <input type="password" id="authPassword" required class="w-full bg-black border border-gray-700 rounded-lg p-3 text-white focus:border-green-500 focus:outline-none">
+                    </div>
+                    
+                    <!-- Verification Section -->
+                    <div id="verificationSection" class="hidden space-y-2 p-3 bg-gray-800/50 rounded-lg border border-gray-700">
+                        <div class="flex justify-between items-center">
+                            <label class="block text-sm text-green-400 font-bold">Verification Code</label>
+                            <span id="timerDisplay" class="text-xs text-red-400 font-mono">10:00</span>
+                        </div>
+                        <input type="text" id="authCode" placeholder="Enter 6-digit code" class="w-full bg-black border border-gray-600 rounded-lg p-3 text-white focus:border-green-500 focus:outline-none font-mono tracking-widest text-center text-lg">
+                        <button type="button" onclick="window.app.requestCode()" class="w-full text-xs text-gray-400 hover:text-white underline">Resend Code</button>
+                    </div>
 
-</div>
-</div>
+                    <button type="submit" id="authSubmitBtn" class="w-full bg-green-600 text-black font-bold py-3 rounded-lg hover:bg-green-500 transition-colors mt-2">
+                        <span id="authBtnText">Request Code</span>
+                    </button>
+                </form>
 
-<!-- SCRIPT -->
-<script>
-const app = {
+                <div class="mt-6 text-center">
+                    <p class="text-sm text-gray-400">
+                        <span id="authSwitchText">Don't have an account?</span>
+                        <button onclick="window.app.switchAuthMode()" class="text-green-400 hover:underline ml-1 font-medium" id="authSwitchBtn">Register</button>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
 
-posts: JSON.parse(localStorage.getItem("posts")) || [],
-
-navigate(view) {
-document.getElementById("homeView").classList.add("hidden");
-document.getElementById("createView").classList.add("hidden");
-document.getElementById("profileView").classList.add("hidden");
-
-if(view === "home") document.getElementById("homeView").classList.remove("hidden");
-if(view === "create") document.getElementById("createView").classList.remove("hidden");
-if(view === "profile") document.getElementById("profileView").classList.remove("hidden");
-},
-
-toggleAuth() {
-document.getElementById("authModal").classList.toggle("hidden");
-},
-
-login(e) {
-e.preventDefault();
-alert("Logged in (Demo)");
-this.toggleAuth();
-},
-
-addPost(e) {
-e.preventDefault();
-
-const title = document.getElementById("postTitle").value;
-const content = document.getElementById("postContent").value;
-
-const post = { title, content };
-this.posts.unshift(post);
-
-localStorage.setItem("posts", JSON.stringify(this.posts));
-
-document.getElementById("postTitle").value="";
-document.getElementById("postContent").value="";
-
-this.renderPosts();
-this.navigate("home");
-},
-
-renderPosts() {
-const container = document.getElementById("posts");
-container.innerHTML="";
-
-if(this.posts.length === 0){
-container.innerHTML="<p class='text-gray-500'>No posts yet.</p>";
-return;
-}
-
-this.posts.forEach(p=>{
-container.innerHTML += `
-<div class="glass p-4 rounded-xl border border-gray-800">
-<h3 class="text-lg font-bold text-green-400">${p.title}</h3>
-<p class="text-gray-300 mt-2">${p.content}</p>
-</div>
-`;
-});
-}
-
-};
-
-app.renderPosts();
-</script>
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed bottom-5 right-5 transform translate-y-20 opacity-0 transition-all duration-300 z-[110] bg-gray-800 border-l-4 border-green-500 text-white px-6 py-4 rounded shadow-2xl flex items-center gap-3">
+        <i class="fa-solid fa-check-circle text-green-500"></i>
+        <span id="toastMsg">Notification</span>
+    </div>
 
 </body>
 </html>
