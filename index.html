@@ -56,7 +56,8 @@
                 submittingReply: false,
                 currentChat: null,
                 highlightedComment: null,
-                highlightedReply: null
+                highlightedReply: null,
+                suspendCountdownInterval: null
             },
 
             admins: ['cryptomax172003@gmail.com'],
@@ -207,9 +208,11 @@
                 }
                 
                 // Listen to conversations where current user is a participant
+                // Use simple query without ordering to avoid index issues
                 this.data.messagesListener = db.collection('conversations')
                     .where('participants', 'array-contains', this.data.currentUser.email)
                     .onSnapshot((snapshot) => {
+                        console.log('Conversations updated:', snapshot.size);
                         if (this.data.view === 'messages') {
                             this.renderMessagesList();
                         } else if (this.data.view === 'chat' && this.data.currentChat) {
@@ -1308,6 +1311,8 @@
             // ==========================================
             
             async startMessage(targetEmail) {
+                console.log('Starting message with:', targetEmail);
+                
                 if (!this.data.currentUser) {
                     this.showToast('Please login to send messages', 'error');
                     this.toggleAuthModal();
@@ -1327,40 +1332,46 @@
                 
                 // Check if already has conversation
                 const conversationId = this.getConversationId(this.data.currentUser.email, targetEmail);
-                const conversationDoc = await db.collection('conversations').doc(conversationId).get();
                 
-                if (conversationDoc.exists) {
-                    const data = conversationDoc.data();
-                    // Check if blocked
-                    if (data.blocked && (data.blockedBy === this.data.currentUser.email || data.blockedBy === targetEmail)) {
-                        this.showToast('Cannot message this user. Conversation is blocked.', 'error');
-                        return;
+                try {
+                    const conversationDoc = await db.collection('conversations').doc(conversationId).get();
+                    
+                    if (conversationDoc.exists) {
+                        const data = conversationDoc.data();
+                        // Check if blocked
+                        if (data.blocked && (data.blockedBy === this.data.currentUser.email || data.blockedBy === targetEmail)) {
+                            this.showToast('Cannot message this user. Conversation is blocked.', 'error');
+                            return;
+                        }
+                        // If conversation exists and accepted, go to chat
+                        if (data.status === 'accepted') {
+                            this.navigate('chat', { conversationId, otherUser: targetEmail });
+                            return;
+                        }
                     }
-                    // If conversation exists and accepted, go to chat
-                    if (data.status === 'accepted') {
+                    
+                    // Check if they follow each other
+                    const currentUserData = this.data.users.find(u => u.email === this.data.currentUser.email);
+                    const targetUserData = this.data.users.find(u => u.email === targetEmail);
+                    
+                    const currentFollowsTarget = currentUserData?.following?.includes(targetEmail);
+                    const targetFollowsCurrent = targetUserData?.following?.includes(this.data.currentUser.email);
+                    
+                    if (currentFollowsTarget && targetFollowsCurrent) {
+                        // Mutual follow - create conversation if not exists or show chat
+                        if (!conversationDoc.exists) {
+                            await this.createConversation(targetEmail, 'accepted');
+                        } else if (conversationDoc.data().status === 'pending') {
+                            await db.collection('conversations').doc(conversationId).update({ status: 'accepted' });
+                        }
                         this.navigate('chat', { conversationId, otherUser: targetEmail });
-                        return;
+                    } else {
+                        // Show message request modal
+                        this.showMessageRequestModal(targetEmail);
                     }
-                }
-                
-                // Check if they follow each other
-                const currentUserData = this.data.users.find(u => u.email === this.data.currentUser.email);
-                const targetUserData = this.data.users.find(u => u.email === targetEmail);
-                
-                const currentFollowsTarget = currentUserData?.following?.includes(targetEmail);
-                const targetFollowsCurrent = targetUserData?.following?.includes(this.data.currentUser.email);
-                
-                if (currentFollowsTarget && targetFollowsCurrent) {
-                    // Mutual follow - create conversation if not exists or show chat
-                    if (!conversationDoc.exists) {
-                        await this.createConversation(targetEmail, 'accepted');
-                    } else if (conversationDoc.data().status === 'pending') {
-                        await db.collection('conversations').doc(conversationId).update({ status: 'accepted' });
-                    }
-                    this.navigate('chat', { conversationId, otherUser: targetEmail });
-                } else {
-                    // Show message request modal
-                    this.showMessageRequestModal(targetEmail);
+                } catch (error) {
+                    console.error('Error starting message:', error);
+                    this.showToast('Error starting conversation', 'error');
                 }
             },
             
@@ -1370,7 +1381,6 @@
             
             async createConversation(targetEmail, status = 'pending') {
                 const conversationId = this.getConversationId(this.data.currentUser.email, targetEmail);
-                const targetUser = this.data.users.find(u => u.email === targetEmail);
                 
                 await db.collection('conversations').doc(conversationId).set({
                     participants: [this.data.currentUser.email, targetEmail],
@@ -1469,15 +1479,19 @@
                 }
                 
                 try {
+                    // Use get() instead of onSnapshot to avoid permission issues initially
                     const snapshot = await db.collection('conversations')
                         .where('participants', 'array-contains', this.data.currentUser.email)
-                        .orderBy('lastMessageAt', 'desc')
                         .get();
                     
                     const conversations = [];
                     snapshot.forEach(doc => {
-                        conversations.push({ id: doc.id, ...doc.data() });
+                        const data = doc.data();
+                        conversations.push({ id: doc.id, ...data });
                     });
+                    
+                    // Sort manually by lastMessageAt
+                    conversations.sort((a, b) => (b.lastMessageAt || 0) - (a.lastMessageAt || 0));
                     
                     if (conversations.length === 0) {
                         container.innerHTML = '<div class="text-center text-gray-500 py-8">No conversations yet</div>';
@@ -1526,28 +1540,32 @@
                     }).join('');
                 } catch (error) {
                     console.error('Error loading messages:', error);
-                    container.innerHTML = `<div class="text-center text-gray-500 py-8">Error loading messages</div>`;
+                    container.innerHTML = `<div class="text-center text-gray-500 py-8">Error loading messages<br><span class="text-xs">${error.message}</span></div>`;
                 }
             },
             
             async handleConversationClick(conversationId, otherUserEmail) {
-                const conversationDoc = await db.collection('conversations').doc(conversationId).get();
-                if (!conversationDoc.exists) return;
-                
-                const data = conversationDoc.data();
-                
-                if (data.status === 'pending') {
-                    if (data.initiatedBy === this.data.currentUser.email) {
-                        // Show pending modal for initiator
-                        this.showPendingRequestModal(otherUserEmail);
+                try {
+                    const conversationDoc = await db.collection('conversations').doc(conversationId).get();
+                    if (!conversationDoc.exists) return;
+                    
+                    const data = conversationDoc.data();
+                    
+                    if (data.status === 'pending') {
+                        if (data.initiatedBy === this.data.currentUser.email) {
+                            // Show pending modal for initiator
+                            this.showPendingRequestModal(otherUserEmail);
+                        } else {
+                            // Show accept/reject modal for receiver
+                            this.showAcceptRejectModal(conversationId, otherUserEmail);
+                        }
+                    } else if (data.blocked) {
+                        this.showToast('This conversation is blocked', 'error');
                     } else {
-                        // Show accept/reject modal for receiver
-                        this.showAcceptRejectModal(conversationId, otherUserEmail);
+                        this.navigate('chat', { conversationId, otherUser: otherUserEmail });
                     }
-                } else if (data.blocked) {
-                    this.showToast('This conversation is blocked', 'error');
-                } else {
-                    this.navigate('chat', { conversationId, otherUser: otherUserEmail });
+                } catch (error) {
+                    console.error('Error handling conversation click:', error);
                 }
             },
             
@@ -1635,102 +1653,108 @@
                 container.classList.remove('hidden');
                 
                 const otherUserData = this.data.users.find(u => u.email === otherUser);
-                const conversationDoc = await db.collection('conversations').doc(conversationId).get();
-                const conversationData = conversationDoc.data();
                 
-                // Check if blocked
-                const isBlocked = conversationData?.blocked;
-                const blockedBy = conversationData?.blockedBy;
-                const isBlockedByMe = blockedBy === this.data.currentUser.email;
-                
-                // Render header with block/unblock button
-                header.innerHTML = `
-                    <div class="flex items-center justify-between mb-4">
-                        <div class="flex items-center gap-3">
-                            <button onclick="window.app.navigate('messages')" class="text-gray-400 hover:text-white">
-                                <i class="fa-solid fa-arrow-left"></i>
-                            </button>
-                            <img src="${otherUserData?.pic || `https://ui-avatars.com/api/?name=${encodeURIComponent(otherUserData?.displayName || otherUserData?.tag || 'User')}&background=10b981&color=fff&size=64`}" 
-                                 class="w-10 h-10 rounded-full object-cover">
-                            <div>
-                                <div class="text-white font-bold">${otherUserData?.displayName || otherUserData?.tag || 'Unknown'}</div>
-                                <div class="text-xs text-gray-400">@${otherUserData?.tag || 'unknown'}</div>
-                            </div>
-                        </div>
-                        <button onclick="window.app.toggleBlock('${conversationId}', '${otherUser}')" 
-                                class="px-4 py-2 rounded-lg ${isBlocked ? 'bg-red-600 hover:bg-red-500' : 'bg-gray-700 hover:bg-gray-600'} text-white text-sm font-bold transition-colors">
-                            ${isBlocked ? (isBlockedByMe ? 'Unblock' : 'Blocked') : 'Block'}
-                        </button>
-                    </div>
-                `;
-                
-                // Load messages
-                const messagesSnapshot = await db.collection('conversations').doc(conversationId)
-                    .collection('messages')
-                    .orderBy('timestamp', 'asc')
-                    .get();
-                
-                const messages = [];
-                messagesSnapshot.forEach(doc => {
-                    messages.push({ id: doc.id, ...doc.data() });
-                });
-                
-                if (messages.length === 0) {
-                    messagesContainer.innerHTML = '<div class="text-center text-gray-500 py-8">No messages yet. Start the conversation!</div>';
-                } else {
-                    messagesContainer.innerHTML = messages.map(msg => {
-                        const isMe = msg.sender === this.data.currentUser.email;
-                        return `
-                            <div class="flex ${isMe ? 'justify-end' : 'justify-start'} mb-4">
-                                <div class="max-w-[70%] ${isMe ? 'bg-green-600 text-black' : 'bg-gray-700 text-white'} rounded-lg p-3">
-                                    ${msg.image ? `<img src="${msg.image}" class="mb-2 max-h-48 rounded cursor-pointer" onclick="window.app.openImageViewer('${msg.image}', 'Message Image')">` : ''}
-                                    <div class="text-sm">${msg.text}</div>
-                                    <div class="text-xs ${isMe ? 'text-green-800' : 'text-gray-400'} mt-1 text-right">
-                                        ${this.formatDateTime(msg.timestamp)}
-                                    </div>
+                try {
+                    const conversationDoc = await db.collection('conversations').doc(conversationId).get();
+                    const conversationData = conversationDoc.data() || {};
+                    
+                    // Check if blocked
+                    const isBlocked = conversationData?.blocked;
+                    const blockedBy = conversationData?.blockedBy;
+                    const isBlockedByMe = blockedBy === this.data.currentUser.email;
+                    
+                    // Render header with block/unblock button
+                    header.innerHTML = `
+                        <div class="flex items-center justify-between mb-4">
+                            <div class="flex items-center gap-3">
+                                <button onclick="window.app.navigate('messages')" class="text-gray-400 hover:text-white">
+                                    <i class="fa-solid fa-arrow-left"></i>
+                                </button>
+                                <img src="${otherUserData?.pic || `https://ui-avatars.com/api/?name=${encodeURIComponent(otherUserData?.displayName || otherUserData?.tag || 'User')}&background=10b981&color=fff&size=64`}" 
+                                     class="w-10 h-10 rounded-full object-cover">
+                                <div>
+                                    <div class="text-white font-bold">${otherUserData?.displayName || otherUserData?.tag || 'Unknown'}</div>
+                                    <div class="text-xs text-gray-400">@${otherUserData?.tag || 'unknown'}</div>
                                 </div>
                             </div>
-                        `;
-                    }).join('');
+                            <button onclick="window.app.toggleBlock('${conversationId}', '${otherUser}')" 
+                                    class="px-4 py-2 rounded-lg ${isBlocked ? 'bg-red-600 hover:bg-red-500' : 'bg-gray-700 hover:bg-gray-600'} text-white text-sm font-bold transition-colors">
+                                ${isBlocked ? (isBlockedByMe ? 'Unblock' : 'Blocked') : 'Block'}
+                            </button>
+                        </div>
+                    `;
                     
-                    // Scroll to bottom
-                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                }
-                
-                // Render input area (disabled if blocked)
-                const inputContainer = document.getElementById('chatInputContainer');
-                if (inputContainer) {
-                    if (isBlocked) {
-                        inputContainer.innerHTML = `
-                            <div class="p-4 bg-red-900/30 border border-red-500/30 rounded-lg text-center text-red-400">
-                                ${isBlockedByMe ? 'You have blocked this user. Unblock to send messages.' : 'You have been blocked by this user.'}
-                            </div>
-                        `;
+                    // Load messages
+                    const messagesSnapshot = await db.collection('conversations').doc(conversationId)
+                        .collection('messages')
+                        .orderBy('timestamp', 'asc')
+                        .get();
+                    
+                    const messages = [];
+                    messagesSnapshot.forEach(doc => {
+                        messages.push({ id: doc.id, ...doc.data() });
+                    });
+                    
+                    if (messages.length === 0) {
+                        messagesContainer.innerHTML = '<div class="text-center text-gray-500 py-8">No messages yet. Start the conversation!</div>';
                     } else {
-                        inputContainer.innerHTML = `
-                            <div class="flex gap-2">
-                                <input type="text" id="chatMessageInput" placeholder="Type a message..." 
-                                       class="flex-1 bg-gray-800 border border-gray-700 rounded-lg p-3 text-white focus:border-green-500 focus:outline-none"
-                                       onkeypress="if(event.key === 'Enter') window.app.sendChatMessage('${conversationId}')">
-                                <input type="url" id="chatImageInput" placeholder="Image URL..." 
-                                       class="w-32 bg-gray-800 border border-gray-700 rounded-lg p-3 text-white text-sm focus:border-green-500 focus:outline-none">
-                                <button onclick="window.app.sendChatMessage('${conversationId}')" 
-                                        class="bg-green-600 hover:bg-green-500 text-black font-bold px-6 rounded-lg transition-colors">
-                                    <i class="fa-solid fa-paper-plane"></i>
-                                </button>
-                            </div>
-                        `;
+                        messagesContainer.innerHTML = messages.map(msg => {
+                            const isMe = msg.sender === this.data.currentUser.email;
+                            return `
+                                <div class="flex ${isMe ? 'justify-end' : 'justify-start'} mb-4">
+                                    <div class="max-w-[70%] ${isMe ? 'bg-green-600 text-black' : 'bg-gray-700 text-white'} rounded-lg p-3">
+                                        ${msg.image ? `<img src="${msg.image}" class="mb-2 max-h-48 rounded cursor-pointer" onclick="window.app.openImageViewer('${msg.image}', 'Message Image')">` : ''}
+                                        <div class="text-sm">${msg.text}</div>
+                                        <div class="text-xs ${isMe ? 'text-green-800' : 'text-gray-400'} mt-1 text-right">
+                                            ${this.formatDateTime(msg.timestamp)}
+                                        </div>
+                                    </div>
+                                </div>
+                            `;
+                        }).join('');
+                        
+                        // Scroll to bottom
+                        messagesContainer.scrollTop = messagesContainer.scrollHeight;
                     }
+                    
+                    // Render input area (disabled if blocked)
+                    const inputContainer = document.getElementById('chatInputContainer');
+                    if (inputContainer) {
+                        if (isBlocked) {
+                            inputContainer.innerHTML = `
+                                <div class="p-4 bg-red-900/30 border border-red-500/30 rounded-lg text-center text-red-400">
+                                    ${isBlockedByMe ? 'You have blocked this user. Unblock to send messages.' : 'You have been blocked by this user.'}
+                                </div>
+                            `;
+                        } else {
+                            inputContainer.innerHTML = `
+                                <div class="flex gap-2">
+                                    <input type="text" id="chatMessageInput" placeholder="Type a message..." 
+                                           class="flex-1 bg-gray-800 border border-gray-700 rounded-lg p-3 text-white focus:border-green-500 focus:outline-none"
+                                           onkeypress="if(event.key === 'Enter') window.app.sendChatMessage('${conversationId}')">
+                                    <input type="url" id="chatImageInput" placeholder="Image URL..." 
+                                           class="w-32 bg-gray-800 border border-gray-700 rounded-lg p-3 text-white text-sm focus:border-green-500 focus:outline-none">
+                                    <button onclick="window.app.sendChatMessage('${conversationId}')" 
+                                            class="bg-green-600 hover:bg-green-500 text-black font-bold px-6 rounded-lg transition-colors">
+                                        <i class="fa-solid fa-paper-plane"></i>
+                                    </button>
+                                </div>
+                            `;
+                        }
+                    }
+                    
+                    // Mark messages as read
+                    messagesSnapshot.forEach(async doc => {
+                        const msg = doc.data();
+                        if (msg.sender !== this.data.currentUser.email && !msg.read) {
+                            await db.collection('conversations').doc(conversationId)
+                                .collection('messages').doc(doc.id).update({ read: true });
+                        }
+                    });
+                } catch (error) {
+                    console.error('Error rendering chat:', error);
+                    messagesContainer.innerHTML = `<div class="text-center text-gray-500 py-8">Error loading chat</div>`;
                 }
-                
-                // Mark messages as read
-                messagesSnapshot.forEach(async doc => {
-                    const msg = doc.data();
-                    if (msg.sender !== this.data.currentUser.email && !msg.read) {
-                        await db.collection('conversations').doc(conversationId)
-                            .collection('messages').doc(doc.id).update({ read: true });
-                    }
-                });
             },
             
             async sendChatMessage(conversationId) {
@@ -1774,33 +1798,38 @@
             },
             
             async toggleBlock(conversationId, otherUser) {
-                const conversationDoc = await db.collection('conversations').doc(conversationId).get();
-                if (!conversationDoc.exists) return;
-                
-                const data = conversationDoc.data();
-                
-                if (data.blocked) {
-                    if (data.blockedBy === this.data.currentUser.email) {
-                        // Unblock
-                        await db.collection('conversations').doc(conversationId).update({
-                            blocked: false,
-                            blockedBy: null
-                        });
-                        this.showToast('User unblocked');
+                try {
+                    const conversationDoc = await db.collection('conversations').doc(conversationId).get();
+                    if (!conversationDoc.exists) return;
+                    
+                    const data = conversationDoc.data();
+                    
+                    if (data.blocked) {
+                        if (data.blockedBy === this.data.currentUser.email) {
+                            // Unblock
+                            await db.collection('conversations').doc(conversationId).update({
+                                blocked: false,
+                                blockedBy: null
+                            });
+                            this.showToast('User unblocked');
+                        } else {
+                            this.showToast('You cannot unblock. The other user blocked you.', 'error');
+                        }
                     } else {
-                        this.showToast('You cannot unblock. The other user blocked you.', 'error');
+                        // Block
+                        await db.collection('conversations').doc(conversationId).update({
+                            blocked: true,
+                            blockedBy: this.data.currentUser.email
+                        });
+                        this.showToast('User blocked');
                     }
-                } else {
-                    // Block
-                    await db.collection('conversations').doc(conversationId).update({
-                        blocked: true,
-                        blockedBy: this.data.currentUser.email
-                    });
-                    this.showToast('User blocked');
+                    
+                    // Refresh chat
+                    this.renderChat(this.data.currentChat);
+                } catch (error) {
+                    console.error('Error toggling block:', error);
+                    this.showToast('Error blocking/unblocking user', 'error');
                 }
-                
-                // Refresh chat
-                this.renderChat(this.data.currentChat);
             },
 
             // ==========================================
@@ -1979,6 +2008,7 @@
                 if (profileFollowing) profileFollowing.innerText = followingCount;
 
                 const isOwner = this.data.currentUser?.email === email;
+                // Fix: Check if current user is admin by checking if their email is in admins array
                 const isAdmin = this.admins.includes(this.data.currentUser?.email);
                 const isAdminViewing = isAdmin && !isOwner;
 
@@ -1996,25 +2026,31 @@
 
                 // Show suspension countdown for suspended users (visible to self and admins)
                 if (suspendCountdown) {
+                    // Clear any existing interval
+                    if (this.data.suspendCountdownInterval) {
+                        clearInterval(this.data.suspendCountdownInterval);
+                        this.data.suspendCountdownInterval = null;
+                    }
+                    
                     const remaining = this.getRemainingSuspensionTime(email);
                     if (remaining && (isOwner || isAdmin)) {
                         suspendCountdown.classList.remove('hidden');
                         this.updateSuspendCountdown(suspendCountdown, remaining);
                         
                         // Update countdown every second
-                        if (this.suspendCountdownInterval) {
-                            clearInterval(this.suspendCountdownInterval);
-                        }
-                        this.suspendCountdownInterval = setInterval(() => {
+                        this.data.suspendCountdownInterval = setInterval(() => {
                             const newRemaining = this.getRemainingSuspensionTime(email);
                             if (newRemaining) {
                                 this.updateSuspendCountdown(suspendCountdown, newRemaining);
                             } else {
                                 suspendCountdown.classList.add('hidden');
-                                clearInterval(this.suspendCountdownInterval);
+                                clearInterval(this.data.suspendCountdownInterval);
+                                this.data.suspendCountdownInterval = null;
                                 if (isAdminViewing && suspendBtn) {
                                     suspendBtn.innerText = 'Suspend User';
                                 }
+                                // Refresh profile to update UI
+                                this.renderProfile(email);
                             }
                         }, 1000);
                     } else {
@@ -2055,6 +2091,7 @@
                     // Show message button for logged in users viewing others
                     if (this.data.currentUser && messageBtn) {
                         messageBtn.classList.remove('hidden');
+                        // Fix: Pass the email parameter correctly
                         messageBtn.onclick = () => this.startMessage(email);
                     } else {
                         messageBtn?.classList.add('hidden');
@@ -3085,15 +3122,19 @@
                             <div class="text-xs text-gray-400 uppercase tracking-wider">Following</div>
                         </div>
                     </div>
-                    <div class="flex gap-2">
+                    <!-- FIXED: Stack buttons vertically on mobile, horizontal on desktop -->
+                    <div class="flex flex-col gap-2">
                         <button id="notificationBtn" onclick="window.app.navigate('notifications')" class="hidden relative p-3 rounded-full bg-gray-800 hover:bg-gray-700 transition-colors">
                             <i class="fa-solid fa-bell text-white text-xl"></i>
                             <span id="notificationBadge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">0</span>
                         </button>
-                        <button id="messageBtn" onclick="window.app.startMessage()" class="hidden px-6 py-2 rounded-full bg-blue-600 text-white font-bold hover:bg-blue-500 transition-colors flex items-center gap-2">
+                        <!-- Follow button -->
+                        <button id="followBtn" onclick="window.app.toggleFollow()" class="hidden px-6 py-2 rounded-full bg-white text-black font-bold hover:bg-gray-200 transition-colors">Follow</button>
+                        <!-- Message button - now below follow button -->
+                        <button id="messageBtn" onclick="window.app.startMessage()" class="hidden px-6 py-2 rounded-full bg-blue-600 text-white font-bold hover:bg-blue-500 transition-colors flex items-center justify-center gap-2">
                             <i class="fa-solid fa-message"></i> Message
                         </button>
-                        <button id="followBtn" onclick="window.app.toggleFollow()" class="hidden px-6 py-2 rounded-full bg-white text-black font-bold hover:bg-gray-200 transition-colors">Follow</button>
+                        <!-- Suspend button - visible only to admins -->
                         <button id="suspendBtn" onclick="window.app.showSuspendModal()" class="hidden px-6 py-2 rounded-full bg-red-600 text-white font-bold hover:bg-red-500 transition-colors">
                             Suspend User
                         </button>
