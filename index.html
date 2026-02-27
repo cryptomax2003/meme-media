@@ -456,6 +456,100 @@
             },
 
             // ==========================================
+            // COMMENTS RENDERING HELPER
+            // ==========================================
+            
+            renderCommentsSection(post, isAdmin, containerId = null) {
+                const allComments = (post.comments || []).sort((a, b) => b.timestamp - a.timestamp);
+                const isExpanded = this.data.expandedComments.has(post.id);
+                const displayedComments = isExpanded ? allComments : allComments.slice(0, 3);
+                const hasMoreComments = allComments.length > 3;
+                
+                let commentsHtml = '';
+                if (allComments.length > 0) {
+                    const commentsList = displayedComments.map((c, index) => {
+                        const commentId = `comment-${post.id}-${index}`;
+                        const isRepliesExpanded = this.data.expandedReplies.has(commentId);
+                        const replies = (c.replies || []).sort((a, b) => b.timestamp - a.timestamp);
+                        const hasReplies = replies.length > 0;
+                        
+                        let repliesHtml = '';
+                        if (hasReplies && isRepliesExpanded) {
+                            repliesHtml = `
+                                <div class="ml-4 mt-2 pl-3 border-l-2 border-gray-700 space-y-2">
+                                    ${replies.map(r => {
+                                        const canDeleteReply = isAdmin || this.data.currentUser?.tag === r.user;
+                                        return `
+                                            <div class="text-xs text-gray-400">
+                                                <div class="flex items-start gap-2">
+                                                    <span class="text-green-400 font-bold cursor-pointer hover:underline" 
+                                                          onclick="window.app.navigate('profile', '${this.getUserEmailByTag(r.user)}')">@${r.user}</span>
+                                                    <span class="text-gray-500">${this.formatDateTime(r.timestamp)}</span>
+                                                </div>
+                                                <div class="mt-1">${this.formatCommentText(r.text)}</div>
+                                                ${r.image ? `<img src="${r.image}" class="mt-2 max-h-32 rounded cursor-pointer hover:opacity-80" onclick="window.app.openImageViewer('${r.image}', 'Reply Image')">` : ''}
+                                                <div class="flex gap-2 mt-1">
+                                                    <button onclick="window.app.showReplyModal('${post.id}', ${index}, '${r.user}')" 
+                                                            class="text-xs text-blue-400 hover:text-blue-300">Reply</button>
+                                                    ${canDeleteReply ? `
+                                                    <button onclick="window.app.deleteReply('${post.id}', ${index}, ${r.timestamp})" 
+                                                            class="text-xs text-red-400 hover:text-red-300">Delete</button>
+                                                    ` : ''}
+                                                </div>
+                                            </div>
+                                        `;
+                                    }).join('')}
+                                </div>
+                            `;
+                        }
+                        
+                        const canDeleteComment = isAdmin || this.data.currentUser?.tag === c.user;
+                        
+                        return `
+                            <div class="text-xs text-gray-400 mb-3 p-2 bg-gray-800/30 rounded">
+                                <div class="flex items-start justify-between">
+                                    <div class="flex items-center gap-2">
+                                        <span class="text-green-400 font-bold cursor-pointer hover:underline" 
+                                              onclick="window.app.navigate('profile', '${this.getUserEmailByTag(c.user)}')">@${c.user}</span>
+                                        <span class="text-gray-500">${this.formatDateTime(c.timestamp)}</span>
+                                    </div>
+                                    <div class="flex gap-2">
+                                        <button onclick="window.app.showReplyModal('${post.id}', ${index}, '${c.user}')" 
+                                                class="text-xs text-blue-400 hover:text-blue-300">Reply</button>
+                                        ${canDeleteComment ? `
+                                        <button onclick="window.app.deleteComment('${post.id}', ${index})" 
+                                                class="text-xs text-red-400 hover:text-red-300">Delete</button>
+                                        ` : ''}
+                                    </div>
+                                </div>
+                                <div class="mt-1">${this.formatCommentText(c.text)}</div>
+                                ${c.image ? `<img src="${c.image}" class="mt-2 max-h-32 rounded cursor-pointer hover:opacity-80" onclick="window.app.openImageViewer('${c.image}', 'Comment Image')">` : ''}
+                                ${hasReplies ? `
+                                    <button onclick="window.app.toggleReplies('${commentId}')" class="text-xs text-blue-400 hover:text-blue-300 mt-2 font-medium">
+                                        ${isRepliesExpanded ? 'Hide Replies ↑' : `Show Replies (${replies.length}) ↓`}
+                                    </button>
+                                ` : ''}
+                                ${repliesHtml}
+                            </div>
+                        `;
+                    }).join('');
+                    
+                    const readMoreBtn = hasMoreComments ? `
+                        <button onclick="window.app.toggleComments('${post.id}')" class="text-xs text-blue-400 hover:text-blue-300 mb-2 font-medium">
+                            ${isExpanded ? 'Read Less ↑' : `Read More (${allComments.length - 3} more) ↓`}
+                        </button>
+                    ` : '';
+                    
+                    commentsHtml = `<div class="mt-3 pt-3 border-t border-gray-700 space-y-1">
+                        ${readMoreBtn}
+                        ${commentsList}
+                    </div>`;
+                }
+                
+                return commentsHtml;
+            },
+
+            // ==========================================
             // POSTS RENDERING - FIXED SINGLE COLUMN
             // ==========================================
             
@@ -510,92 +604,7 @@
                     card.className = 'glass-panel rounded-xl overflow-hidden border border-gray-800 hover:border-green-500/50 transition-all duration-300 w-full mb-6';
                     card.setAttribute('data-post-id', post.id);
                     
-                    // Sort comments by timestamp desc (newest first)
-                    const allComments = (post.comments || []).sort((a, b) => b.timestamp - a.timestamp);
-                    const isExpanded = this.data.expandedComments.has(post.id);
-                    const displayedComments = isExpanded ? allComments : allComments.slice(0, 3);
-                    const hasMoreComments = allComments.length > 3;
-                    
-                    let commentsHtml = '';
-                    if (allComments.length > 0) {
-                        const commentsList = displayedComments.map((c, index) => {
-                            const commentId = `comment-${post.id}-${index}`;
-                            const isRepliesExpanded = this.data.expandedReplies.has(commentId);
-                            const replies = (c.replies || []).sort((a, b) => b.timestamp - a.timestamp);
-                            const hasReplies = replies.length > 0;
-                            
-                            let repliesHtml = '';
-                            if (hasReplies && isRepliesExpanded) {
-                                repliesHtml = `
-                                    <div class="ml-4 mt-2 pl-3 border-l-2 border-gray-700 space-y-2">
-                                        ${replies.map(r => {
-                                            const canDeleteReply = isAdmin || this.data.currentUser?.tag === r.user;
-                                            return `
-                                                <div class="text-xs text-gray-400">
-                                                    <div class="flex items-start gap-2">
-                                                        <span class="text-green-400 font-bold cursor-pointer hover:underline" 
-                                                              onclick="window.app.navigate('profile', '${this.getUserEmailByTag(r.user)}')">@${r.user}</span>
-                                                        <span class="text-gray-500">${this.formatDateTime(r.timestamp)}</span>
-                                                    </div>
-                                                    <div class="mt-1">${this.formatCommentText(r.text)}</div>
-                                                    ${r.image ? `<img src="${r.image}" class="mt-2 max-h-32 rounded cursor-pointer hover:opacity-80" onclick="window.app.openImageViewer('${r.image}', 'Reply Image')">` : ''}
-                                                    <div class="flex gap-2 mt-1">
-                                                        <button onclick="window.app.showReplyModal('${post.id}', ${index}, '${c.user}')" 
-                                                                class="text-xs text-blue-400 hover:text-blue-300">Reply</button>
-                                                        ${canDeleteReply ? `
-                                                        <button onclick="window.app.deleteReply('${post.id}', ${index}, '${r.timestamp}')" 
-                                                                class="text-xs text-red-400 hover:text-red-300">Delete</button>
-                                                        ` : ''}
-                                                    </div>
-                                                </div>
-                                            `;
-                                        }).join('')}
-                                    </div>
-                                `;
-                            }
-                            
-                            const canDeleteComment = isAdmin || this.data.currentUser?.tag === c.user;
-                            
-                            return `
-                                <div class="text-xs text-gray-400 mb-3 p-2 bg-gray-800/30 rounded">
-                                    <div class="flex items-start justify-between">
-                                        <div class="flex items-center gap-2">
-                                            <span class="text-green-400 font-bold cursor-pointer hover:underline" 
-                                                  onclick="window.app.navigate('profile', '${this.getUserEmailByTag(c.user)}')">@${c.user}</span>
-                                            <span class="text-gray-500">${this.formatDateTime(c.timestamp)}</span>
-                                        </div>
-                                        <div class="flex gap-2">
-                                            <button onclick="window.app.showReplyModal('${post.id}', ${index}, '${c.user}')" 
-                                                    class="text-xs text-blue-400 hover:text-blue-300">Reply</button>
-                                            ${canDeleteComment ? `
-                                            <button onclick="window.app.deleteComment('${post.id}', ${index})" 
-                                                    class="text-xs text-red-400 hover:text-red-300">Delete</button>
-                                            ` : ''}
-                                        </div>
-                                    </div>
-                                    <div class="mt-1">${this.formatCommentText(c.text)}</div>
-                                    ${c.image ? `<img src="${c.image}" class="mt-2 max-h-32 rounded cursor-pointer hover:opacity-80" onclick="window.app.openImageViewer('${c.image}', 'Comment Image')">` : ''}
-                                    ${hasReplies ? `
-                                        <button onclick="window.app.toggleReplies('${commentId}')" class="text-xs text-blue-400 hover:text-blue-300 mt-2 font-medium">
-                                            ${isRepliesExpanded ? 'Hide Replies ↑' : `Show Replies (${replies.length}) ↓`}
-                                        </button>
-                                    ` : ''}
-                                    ${repliesHtml}
-                                </div>
-                            `;
-                        }).join('');
-                        
-                        const readMoreBtn = hasMoreComments ? `
-                            <button onclick="window.app.toggleComments('${post.id}')" class="text-xs text-blue-400 hover:text-blue-300 mb-2 font-medium">
-                                ${isExpanded ? 'Read Less ↑' : `Read More (${allComments.length - 3} more) ↓`}
-                            </button>
-                        ` : '';
-                        
-                        commentsHtml = `<div class="mt-3 pt-3 border-t border-gray-700 space-y-1">
-                            ${readMoreBtn}
-                            ${commentsList}
-                        </div>`;
-                    }
+                    const commentsHtml = this.renderCommentsSection(post, isAdmin);
                     
                     const imageHtml = post.image ? `
                         <div class="w-full overflow-hidden relative group cursor-pointer bg-gray-800" onclick="window.app.openImageViewer('${post.image}', '${post.title.replace(/'/g, "\\'")}')">
@@ -1314,10 +1323,13 @@
                                 if (post.dislikesList?.includes(this.data.currentUser.email)) userLikeStatus = 'dislike';
                             }
                             
+                            // Use same comments rendering as homepage
+                            const commentsHtml = this.renderCommentsSection(post, isAdmin);
+                            
                             const postImageHtml = post.image ? `
                                 <div class="mb-3 bg-gray-800 rounded overflow-hidden cursor-pointer" onclick="window.app.openImageViewer('${post.image}', '${post.title.replace(/'/g, "\\'")}')">
                                     <img src="${post.image}" 
-                                         class="w-full h-48 object-cover hover:scale-105 transition-transform" 
+                                         class="w-full h-64 object-cover hover:scale-105 transition-transform" 
                                          onerror="this.onerror=null; this.parentElement.style.display='none';"
                                          loading="lazy">
                                 </div>
@@ -1348,6 +1360,7 @@
                                         <i class="fa-solid fa-trash"></i>
                                     </button>` : ''}
                                 </div>
+                                ${commentsHtml}
                             `;
                             userPostsContainer.appendChild(div);
                         });
