@@ -50,9 +50,13 @@
                 postsListener: null,
                 usersListener: null,
                 notificationsListener: null,
+                messagesListener: null,
                 submittingPost: false,
                 submittingComment: false,
-                submittingReply: false
+                submittingReply: false,
+                currentChat: null,
+                highlightedComment: null,
+                highlightedReply: null
             },
 
             admins: ['cryptomax172003@gmail.com'],
@@ -182,6 +186,10 @@
                                     userEmail: this.data.profileViewUser || this.data.currentUser?.email 
                                 });
                             }
+                        } else if (this.data.view === 'messages') {
+                            this.renderMessagesList();
+                        } else if (this.data.view === 'chat') {
+                            this.renderChat(this.data.currentChat);
                         }
                     }, (error) => {
                         console.error('Users listener error:', error);
@@ -189,7 +197,27 @@
 
                 if (this.data.currentUser) {
                     this.setupNotificationsListener();
+                    this.setupMessagesListener();
                 }
+            },
+
+            setupMessagesListener() {
+                if (this.data.messagesListener) {
+                    this.data.messagesListener();
+                }
+                
+                // Listen to conversations where current user is a participant
+                this.data.messagesListener = db.collection('conversations')
+                    .where('participants', 'array-contains', this.data.currentUser.email)
+                    .onSnapshot((snapshot) => {
+                        if (this.data.view === 'messages') {
+                            this.renderMessagesList();
+                        } else if (this.data.view === 'chat' && this.data.currentChat) {
+                            this.renderChat(this.data.currentChat);
+                        }
+                    }, (error) => {
+                        console.error('Messages listener error:', error);
+                    });
             },
 
             setupNotificationsListener() {
@@ -241,6 +269,10 @@
                     this.data.notificationsListener();
                     this.data.notificationsListener = null;
                 }
+                if (this.data.messagesListener) {
+                    this.data.messagesListener();
+                    this.data.messagesListener = null;
+                }
             },
 
             // ==========================================
@@ -268,7 +300,9 @@
                                 createdAt: Date.now(),
                                 country: 'US',
                                 timezone: 'America/New_York',
-                                lastTagChange: null
+                                lastTagChange: null,
+                                suspended: null,
+                                blockedUsers: []
                             };
                             await db.collection('users').doc(user.email).set(newUser);
                             this.data.currentUser = { email: user.email, ...newUser };
@@ -295,7 +329,7 @@
                 console.log('Navigating to:', viewName);
                 this.data.view = viewName;
                 
-                const views = ['homeView', 'createPostView', 'profileView', 'searchUserView', 'followersView', 'notificationsView', 'imageView', 'faqView'];
+                const views = ['homeView', 'createPostView', 'profileView', 'searchUserView', 'followersView', 'notificationsView', 'imageView', 'faqView', 'messagesView', 'chatView'];
                 views.forEach(v => {
                     const el = document.getElementById(v);
                     if (el) el.classList.add('hidden');
@@ -309,7 +343,9 @@
                     'followers': 'followersView',
                     'notifications': 'notificationsView',
                     'image': 'imageView',
-                    'faq': 'faqView'
+                    'faq': 'faqView',
+                    'messages': 'messagesView',
+                    'chat': 'chatView'
                 };
 
                 const targetView = document.getElementById(viewMap[viewName]);
@@ -327,6 +363,11 @@
                     this.renderFollowersList(param);
                 } else if (viewName === 'notifications') {
                     this.renderNotifications();
+                } else if (viewName === 'messages') {
+                    this.renderMessagesList();
+                } else if (viewName === 'chat') {
+                    this.data.currentChat = param;
+                    this.renderChat(param);
                 }
                 
                 window.scrollTo(0, 0);
@@ -396,7 +437,12 @@
                 } else {
                     this.data.expandedComments.add(postId);
                 }
-                this.renderPosts();
+                // Re-render based on current view
+                if (this.data.view === 'profile') {
+                    this.renderProfile(this.data.profileViewUser);
+                } else {
+                    this.renderPosts();
+                }
             },
 
             toggleReplies(commentId) {
@@ -405,7 +451,12 @@
                 } else {
                     this.data.expandedReplies.add(commentId);
                 }
-                this.renderPosts();
+                // Re-render based on current view
+                if (this.data.view === 'profile') {
+                    this.renderProfile(this.data.profileViewUser);
+                } else {
+                    this.renderPosts();
+                }
             },
 
             formatCommentText(text) {
@@ -459,7 +510,7 @@
             // COMMENTS RENDERING HELPER
             // ==========================================
             
-            renderCommentsSection(post, isAdmin, containerId = null) {
+            renderCommentsSection(post, isAdmin, containerId = null, highlightCommentIndex = null, highlightReplyIndices = null) {
                 const allComments = (post.comments || []).sort((a, b) => b.timestamp - a.timestamp);
                 const isExpanded = this.data.expandedComments.has(post.id);
                 const displayedComments = isExpanded ? allComments : allComments.slice(0, 3);
@@ -473,14 +524,21 @@
                         const replies = (c.replies || []).sort((a, b) => b.timestamp - a.timestamp);
                         const hasReplies = replies.length > 0;
                         
+                        // Check if this comment should be highlighted
+                        const isHighlighted = highlightCommentIndex === index;
+                        const highlightClass = isHighlighted ? 'bg-gray-600/50 ring-2 ring-gray-400/50' : 'bg-gray-800/30';
+                        
                         let repliesHtml = '';
                         if (hasReplies && isRepliesExpanded) {
                             repliesHtml = `
                                 <div class="ml-4 mt-2 pl-3 border-l-2 border-gray-700 space-y-2">
-                                    ${replies.map(r => {
+                                    ${replies.map((r, rIndex) => {
                                         const canDeleteReply = isAdmin || this.data.currentUser?.tag === r.user;
+                                        const isReplyHighlighted = highlightReplyIndices && highlightReplyIndices.includes(rIndex);
+                                        const replyHighlightClass = isReplyHighlighted ? 'bg-gray-600/50 ring-2 ring-gray-400/50' : '';
+                                        
                                         return `
-                                            <div class="text-xs text-gray-400">
+                                            <div class="text-xs text-gray-400 p-2 rounded ${replyHighlightClass}">
                                                 <div class="flex items-start gap-2">
                                                     <span class="text-green-400 font-bold cursor-pointer hover:underline" 
                                                           onclick="window.app.navigate('profile', '${this.getUserEmailByTag(r.user)}')">@${r.user}</span>
@@ -506,7 +564,7 @@
                         const canDeleteComment = isAdmin || this.data.currentUser?.tag === c.user;
                         
                         return `
-                            <div class="text-xs text-gray-400 mb-3 p-2 bg-gray-800/30 rounded">
+                            <div class="text-xs text-gray-400 mb-3 p-2 rounded ${highlightClass}" id="${commentId}">
                                 <div class="flex items-start justify-between">
                                     <div class="flex items-center gap-2">
                                         <span class="text-green-400 font-bold cursor-pointer hover:underline" 
@@ -683,6 +741,12 @@
                     return;
                 }
                 
+                // Check if user is suspended
+                if (await this.isUserSuspended(this.data.currentUser.email)) {
+                    this.showToast('Your account is suspended. You cannot create posts.', 'error');
+                    return;
+                }
+                
                 const userDoc = await db.collection('users').doc(this.data.currentUser.email).get();
                 const userData = userDoc.data();
                 const today = new Date().toDateString();
@@ -695,6 +759,27 @@
                 }
 
                 this.navigate('create');
+            },
+
+            async isUserSuspended(email) {
+                const userDoc = await db.collection('users').doc(email).get();
+                if (!userDoc.exists) return false;
+                const userData = userDoc.data();
+                if (!userData.suspended || !userData.suspended.until) return false;
+                return Date.now() < userData.suspended.until;
+            },
+
+            getRemainingSuspensionTime(email) {
+                const user = this.data.users.find(u => u.email === email);
+                if (!user || !user.suspended || !user.suspended.until) return null;
+                const remaining = user.suspended.until - Date.now();
+                if (remaining <= 0) return null;
+                
+                const days = Math.floor(remaining / (24 * 60 * 60 * 1000));
+                const hours = Math.floor((remaining % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+                const minutes = Math.floor((remaining % (60 * 60 * 1000)) / (60 * 1000));
+                
+                return { days, hours, minutes, total: remaining };
             },
 
             async submitPost(e) {
@@ -713,6 +798,12 @@
                 try {
                     if (!this.data.currentUser) {
                         this.showToast('Please login first', 'error');
+                        return;
+                    }
+
+                    // Check suspension
+                    if (await this.isUserSuspended(this.data.currentUser.email)) {
+                        this.showToast('Your account is suspended. You cannot create posts.', 'error');
                         return;
                     }
 
@@ -855,18 +946,26 @@
                     return;
                 }
                 
-                const modal = document.getElementById('commentModal');
-                const input = document.getElementById('commentInput');
-                const imageInput = document.getElementById('commentImageInput');
-                const submitBtn = document.getElementById('submitCommentBtn');
-                
-                if (modal && input && submitBtn) {
-                    modal.classList.remove('hidden');
-                    input.value = '';
-                    if (imageInput) imageInput.value = '';
-                    input.focus();
-                    submitBtn.onclick = () => this.submitComment(postId);
-                }
+                // Check suspension
+                this.isUserSuspended(this.data.currentUser.email).then(isSuspended => {
+                    if (isSuspended) {
+                        this.showToast('Your account is suspended. You cannot comment.', 'error');
+                        return;
+                    }
+                    
+                    const modal = document.getElementById('commentModal');
+                    const input = document.getElementById('commentInput');
+                    const imageInput = document.getElementById('commentImageInput');
+                    const submitBtn = document.getElementById('submitCommentBtn');
+                    
+                    if (modal && input && submitBtn) {
+                        modal.classList.remove('hidden');
+                        input.value = '';
+                        if (imageInput) imageInput.value = '';
+                        input.focus();
+                        submitBtn.onclick = () => this.submitComment(postId);
+                    }
+                });
             },
 
             closeCommentModal() {
@@ -921,7 +1020,7 @@
                             const tag = mention.substring(1);
                             const mentionedUser = this.data.users.find(u => u.tag === tag);
                             if (mentionedUser && mentionedUser.email !== this.data.currentUser.email) {
-                                await this.createNotification(mentionedUser.email, postId, this.data.currentUser.tag, 'mention');
+                                await this.createNotification(mentionedUser.email, postId, this.data.currentUser.tag, 'mention', comments.length - 1);
                             }
                         }
                     }
@@ -965,18 +1064,26 @@
                     return;
                 }
                 
-                const modal = document.getElementById('replyModal');
-                const input = document.getElementById('replyInput');
-                const imageInput = document.getElementById('replyImageInput');
-                const submitBtn = document.getElementById('submitReplyBtn');
-                
-                if (modal && input && submitBtn) {
-                    modal.classList.remove('hidden');
-                    input.value = `@${replyToUser} `;
-                    if (imageInput) imageInput.value = '';
-                    input.focus();
-                    submitBtn.onclick = () => this.submitReply(postId, commentIndex, replyToUser);
-                }
+                // Check suspension
+                this.isUserSuspended(this.data.currentUser.email).then(isSuspended => {
+                    if (isSuspended) {
+                        this.showToast('Your account is suspended. You cannot reply.', 'error');
+                        return;
+                    }
+                    
+                    const modal = document.getElementById('replyModal');
+                    const input = document.getElementById('replyInput');
+                    const imageInput = document.getElementById('replyImageInput');
+                    const submitBtn = document.getElementById('submitReplyBtn');
+                    
+                    if (modal && input && submitBtn) {
+                        modal.classList.remove('hidden');
+                        input.value = `@${replyToUser} `;
+                        if (imageInput) imageInput.value = '';
+                        input.focus();
+                        submitBtn.onclick = () => this.submitReply(postId, commentIndex, replyToUser);
+                    }
+                });
             },
 
             closeReplyModal() {
@@ -1040,7 +1147,7 @@
                             const tag = mention.substring(1);
                             const mentionedUser = this.data.users.find(u => u.tag === tag);
                             if (mentionedUser && mentionedUser.email !== this.data.currentUser.email) {
-                                await this.createNotification(mentionedUser.email, postId, this.data.currentUser.tag, 'reply');
+                                await this.createNotification(mentionedUser.email, postId, this.data.currentUser.tag, 'reply', commentIndex, comments[commentIndex].replies.length - 1);
                             }
                         }
                     }
@@ -1079,7 +1186,7 @@
                 }
             },
 
-            async createNotification(targetEmail, postId, fromUser, type = 'mention') {
+            async createNotification(targetEmail, postId, fromUser, type = 'mention', commentIndex = null, replyIndex = null) {
                 try {
                     await db.collection('notifications').add({
                         targetUser: targetEmail,
@@ -1087,7 +1194,9 @@
                         fromUser: fromUser,
                         type: type,
                         timestamp: Date.now(),
-                        read: false
+                        read: false,
+                        commentIndex: commentIndex,
+                        replyIndex: replyIndex
                     });
                 } catch (error) {
                     console.error('Error creating notification:', error);
@@ -1131,7 +1240,8 @@
                             const typeText = notif.type === 'reply' ? 'replied to you' : 'mentioned you';
                             
                             return `
-                                <div class="p-4 bg-gray-800 rounded-lg mb-3 cursor-pointer hover:bg-gray-700 transition-colors" onclick="window.app.goToPost('${notif.postId}')">
+                                <div class="p-4 bg-gray-800 rounded-lg mb-3 cursor-pointer hover:bg-gray-700 transition-colors" 
+                                     onclick="window.app.goToNotification('${notif.postId}', ${notif.commentIndex}, ${notif.replyIndex})">
                                     <div class="flex items-center gap-3">
                                         <div class="w-10 h-10 rounded-full bg-green-600 flex items-center justify-center flex-shrink-0">
                                             <i class="fa-solid fa-at text-white"></i>
@@ -1158,7 +1268,19 @@
                     });
             },
 
-            goToPost(postId) {
+            goToNotification(postId, commentIndex, replyIndex) {
+                this.data.highlightedComment = commentIndex;
+                this.data.highlightedReply = replyIndex;
+                
+                // If it's a reply, we need to expand the comment and reply
+                if (commentIndex !== null) {
+                    this.data.expandedComments.add(postId);
+                    if (replyIndex !== null) {
+                        const commentId = `comment-${postId}-${commentIndex}`;
+                        this.data.expandedReplies.add(commentId);
+                    }
+                }
+                
                 this.navigate('home');
                 setTimeout(() => {
                     const postElement = document.querySelector(`[data-post-id="${postId}"]`);
@@ -1166,8 +1288,600 @@
                         postElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
                         postElement.classList.add('ring-2', 'ring-green-500');
                         setTimeout(() => postElement.classList.remove('ring-2', 'ring-green-500'), 2000);
+                        
+                        // Scroll to specific comment if provided
+                        if (commentIndex !== null) {
+                            const commentId = `comment-${postId}-${commentIndex}`;
+                            const commentElement = document.getElementById(commentId);
+                            if (commentElement) {
+                                setTimeout(() => {
+                                    commentElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                }, 500);
+                            }
+                        }
                     }
                 }, 500);
+            },
+
+            // ==========================================
+            // MESSAGING SYSTEM
+            // ==========================================
+            
+            async startMessage(targetEmail) {
+                if (!this.data.currentUser) {
+                    this.showToast('Please login to send messages', 'error');
+                    this.toggleAuthModal();
+                    return;
+                }
+                
+                if (targetEmail === this.data.currentUser.email) {
+                    this.showToast('Cannot message yourself', 'error');
+                    return;
+                }
+                
+                // Check if user is suspended
+                if (await this.isUserSuspended(this.data.currentUser.email)) {
+                    this.showToast('Your account is suspended. You cannot send messages.', 'error');
+                    return;
+                }
+                
+                // Check if already has conversation
+                const conversationId = this.getConversationId(this.data.currentUser.email, targetEmail);
+                const conversationDoc = await db.collection('conversations').doc(conversationId).get();
+                
+                if (conversationDoc.exists) {
+                    const data = conversationDoc.data();
+                    // Check if blocked
+                    if (data.blocked && (data.blockedBy === this.data.currentUser.email || data.blockedBy === targetEmail)) {
+                        this.showToast('Cannot message this user. Conversation is blocked.', 'error');
+                        return;
+                    }
+                    // If conversation exists and accepted, go to chat
+                    if (data.status === 'accepted') {
+                        this.navigate('chat', { conversationId, otherUser: targetEmail });
+                        return;
+                    }
+                }
+                
+                // Check if they follow each other
+                const currentUserData = this.data.users.find(u => u.email === this.data.currentUser.email);
+                const targetUserData = this.data.users.find(u => u.email === targetEmail);
+                
+                const currentFollowsTarget = currentUserData?.following?.includes(targetEmail);
+                const targetFollowsCurrent = targetUserData?.following?.includes(this.data.currentUser.email);
+                
+                if (currentFollowsTarget && targetFollowsCurrent) {
+                    // Mutual follow - create conversation if not exists or show chat
+                    if (!conversationDoc.exists) {
+                        await this.createConversation(targetEmail, 'accepted');
+                    } else if (conversationDoc.data().status === 'pending') {
+                        await db.collection('conversations').doc(conversationId).update({ status: 'accepted' });
+                    }
+                    this.navigate('chat', { conversationId, otherUser: targetEmail });
+                } else {
+                    // Show message request modal
+                    this.showMessageRequestModal(targetEmail);
+                }
+            },
+            
+            getConversationId(email1, email2) {
+                return [email1, email2].sort().join('_');
+            },
+            
+            async createConversation(targetEmail, status = 'pending') {
+                const conversationId = this.getConversationId(this.data.currentUser.email, targetEmail);
+                const targetUser = this.data.users.find(u => u.email === targetEmail);
+                
+                await db.collection('conversations').doc(conversationId).set({
+                    participants: [this.data.currentUser.email, targetEmail],
+                    createdAt: Date.now(),
+                    status: status,
+                    lastMessage: null,
+                    lastMessageAt: Date.now(),
+                    initiatedBy: this.data.currentUser.email,
+                    blocked: false,
+                    blockedBy: null
+                });
+                
+                return conversationId;
+            },
+            
+            showMessageRequestModal(targetEmail) {
+                const modal = document.getElementById('messageRequestModal');
+                const input = document.getElementById('messageRequestInput');
+                const imageInput = document.getElementById('messageRequestImageInput');
+                const submitBtn = document.getElementById('sendMessageRequestBtn');
+                
+                if (modal && input && submitBtn) {
+                    modal.classList.remove('hidden');
+                    modal.setAttribute('data-target-email', targetEmail);
+                    input.value = '';
+                    if (imageInput) imageInput.value = '';
+                    input.focus();
+                    submitBtn.onclick = () => this.sendMessageRequest(targetEmail);
+                }
+            },
+            
+            closeMessageRequestModal() {
+                const modal = document.getElementById('messageRequestModal');
+                if (modal) {
+                    modal.classList.add('hidden');
+                    modal.removeAttribute('data-target-email');
+                }
+            },
+            
+            async sendMessageRequest(targetEmail) {
+                const input = document.getElementById('messageRequestInput');
+                const imageInput = document.getElementById('messageRequestImageInput');
+                const submitBtn = document.getElementById('sendMessageRequestBtn');
+                
+                const text = input?.value.trim();
+                const image = imageInput?.value.trim() || '';
+                
+                if (!text) {
+                    this.showToast('Please enter a message', 'error');
+                    return;
+                }
+                
+                submitBtn.innerText = 'Sending...';
+                submitBtn.disabled = true;
+                
+                try {
+                    const conversationId = this.getConversationId(this.data.currentUser.email, targetEmail);
+                    
+                    // Create conversation with pending status
+                    await this.createConversation(targetEmail, 'pending');
+                    
+                    // Add first message
+                    await db.collection('conversations').doc(conversationId).collection('messages').add({
+                        text: text,
+                        image: image,
+                        sender: this.data.currentUser.email,
+                        timestamp: Date.now(),
+                        read: false
+                    });
+                    
+                    // Update conversation
+                    await db.collection('conversations').doc(conversationId).update({
+                        lastMessage: text,
+                        lastMessageAt: Date.now()
+                    });
+                    
+                    this.closeMessageRequestModal();
+                    this.showToast('Message request sent! Waiting for acceptance.');
+                    this.navigate('messages');
+                } catch (error) {
+                    console.error('Error sending message request:', error);
+                    this.showToast('Error sending message request', 'error');
+                } finally {
+                    submitBtn.innerText = 'Send Message';
+                    submitBtn.disabled = false;
+                }
+            },
+            
+            async renderMessagesList() {
+                const container = document.getElementById('messagesListContainer');
+                if (!container) return;
+                
+                if (!this.data.currentUser) {
+                    container.innerHTML = '<div class="text-center text-gray-500 py-8">Please login to view messages</div>';
+                    return;
+                }
+                
+                try {
+                    const snapshot = await db.collection('conversations')
+                        .where('participants', 'array-contains', this.data.currentUser.email)
+                        .orderBy('lastMessageAt', 'desc')
+                        .get();
+                    
+                    const conversations = [];
+                    snapshot.forEach(doc => {
+                        conversations.push({ id: doc.id, ...doc.data() });
+                    });
+                    
+                    if (conversations.length === 0) {
+                        container.innerHTML = '<div class="text-center text-gray-500 py-8">No conversations yet</div>';
+                        return;
+                    }
+                    
+                    container.innerHTML = conversations.map(conv => {
+                        const otherUserEmail = conv.participants.find(p => p !== this.data.currentUser.email);
+                        const otherUser = this.data.users.find(u => u.email === otherUserEmail);
+                        const isPending = conv.status === 'pending';
+                        const isInitiator = conv.initiatedBy === this.data.currentUser.email;
+                        const isBlocked = conv.blocked;
+                        
+                        let statusBadge = '';
+                        if (isBlocked) {
+                            statusBadge = '<span class="text-xs text-red-400 ml-2">Blocked</span>';
+                        } else if (isPending) {
+                            if (isInitiator) {
+                                statusBadge = '<span class="text-xs text-yellow-400 ml-2">Pending</span>';
+                            } else {
+                                statusBadge = '<span class="text-xs text-blue-400 ml-2">New Request</span>';
+                            }
+                        }
+                        
+                        return `
+                            <div class="flex items-center justify-between p-4 bg-gray-800 rounded-lg mb-3 cursor-pointer hover:bg-gray-700 transition-colors" 
+                                 onclick="window.app.handleConversationClick('${conv.id}', '${otherUserEmail}')">
+                                <div class="flex items-center gap-3">
+                                    <img src="${otherUser?.pic || `https://ui-avatars.com/api/?name=${encodeURIComponent(otherUser?.displayName || otherUser?.tag || 'User')}&background=10b981&color=fff&size=64`}" 
+                                         class="w-12 h-12 rounded-full object-cover">
+                                    <div>
+                                        <div class="text-white font-bold flex items-center">
+                                            ${otherUser?.displayName || otherUser?.tag || 'Unknown'}
+                                            ${statusBadge}
+                                        </div>
+                                        <div class="text-xs text-gray-400 truncate max-w-xs">
+                                            ${isPending && !isInitiator ? 'Message request - click to accept or reject' : (conv.lastMessage || 'No messages yet')}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="text-xs text-gray-500">
+                                    ${conv.lastMessageAt ? this.formatDateTime(conv.lastMessageAt) : ''}
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                } catch (error) {
+                    console.error('Error loading messages:', error);
+                    container.innerHTML = `<div class="text-center text-gray-500 py-8">Error loading messages</div>`;
+                }
+            },
+            
+            async handleConversationClick(conversationId, otherUserEmail) {
+                const conversationDoc = await db.collection('conversations').doc(conversationId).get();
+                if (!conversationDoc.exists) return;
+                
+                const data = conversationDoc.data();
+                
+                if (data.status === 'pending') {
+                    if (data.initiatedBy === this.data.currentUser.email) {
+                        // Show pending modal for initiator
+                        this.showPendingRequestModal(otherUserEmail);
+                    } else {
+                        // Show accept/reject modal for receiver
+                        this.showAcceptRejectModal(conversationId, otherUserEmail);
+                    }
+                } else if (data.blocked) {
+                    this.showToast('This conversation is blocked', 'error');
+                } else {
+                    this.navigate('chat', { conversationId, otherUser: otherUserEmail });
+                }
+            },
+            
+            showPendingRequestModal(otherUserEmail) {
+                const user = this.data.users.find(u => u.email === otherUserEmail);
+                const modal = document.getElementById('pendingRequestModal');
+                const text = document.getElementById('pendingRequestText');
+                
+                if (modal && text) {
+                    text.innerHTML = `Waiting for <span class="text-green-400">@${user?.tag || 'user'}</span> to accept your message request.`;
+                    modal.classList.remove('hidden');
+                }
+            },
+            
+            closePendingRequestModal() {
+                const modal = document.getElementById('pendingRequestModal');
+                if (modal) modal.classList.add('hidden');
+            },
+            
+            showAcceptRejectModal(conversationId, otherUserEmail) {
+                const user = this.data.users.find(u => u.email === otherUserEmail);
+                const modal = document.getElementById('acceptRejectModal');
+                const text = document.getElementById('acceptRejectText');
+                const acceptBtn = document.getElementById('acceptRequestBtn');
+                const rejectBtn = document.getElementById('rejectRequestBtn');
+                
+                if (modal && text && acceptBtn && rejectBtn) {
+                    text.innerHTML = `<span class="text-green-400">@${user?.tag || 'user'}</span> wants to start a conversation with you.`;
+                    modal.classList.remove('hidden');
+                    
+                    acceptBtn.onclick = () => this.acceptConversation(conversationId, otherUserEmail);
+                    rejectBtn.onclick = () => this.rejectConversation(conversationId);
+                }
+            },
+            
+            closeAcceptRejectModal() {
+                const modal = document.getElementById('acceptRejectModal');
+                if (modal) modal.classList.add('hidden');
+            },
+            
+            async acceptConversation(conversationId, otherUserEmail) {
+                try {
+                    await db.collection('conversations').doc(conversationId).update({
+                        status: 'accepted'
+                    });
+                    this.closeAcceptRejectModal();
+                    this.showToast('Conversation accepted!');
+                    this.navigate('chat', { conversationId, otherUser: otherUserEmail });
+                } catch (error) {
+                    console.error('Error accepting conversation:', error);
+                    this.showToast('Error accepting conversation', 'error');
+                }
+            },
+            
+            async rejectConversation(conversationId) {
+                try {
+                    // Delete the conversation and all messages
+                    const messagesSnapshot = await db.collection('conversations').doc(conversationId).collection('messages').get();
+                    const batch = db.batch();
+                    messagesSnapshot.forEach(doc => {
+                        batch.delete(doc.ref);
+                    });
+                    batch.delete(db.collection('conversations').doc(conversationId));
+                    await batch.commit();
+                    
+                    this.closeAcceptRejectModal();
+                    this.showToast('Conversation rejected');
+                    this.renderMessagesList();
+                } catch (error) {
+                    console.error('Error rejecting conversation:', error);
+                    this.showToast('Error rejecting conversation', 'error');
+                }
+            },
+            
+            async renderChat(chatData) {
+                if (!chatData) return;
+                
+                const { conversationId, otherUser } = chatData;
+                const container = document.getElementById('chatContainer');
+                const header = document.getElementById('chatHeader');
+                const messagesContainer = document.getElementById('chatMessages');
+                
+                if (!container || !header || !messagesContainer) return;
+                
+                container.classList.remove('hidden');
+                
+                const otherUserData = this.data.users.find(u => u.email === otherUser);
+                const conversationDoc = await db.collection('conversations').doc(conversationId).get();
+                const conversationData = conversationDoc.data();
+                
+                // Check if blocked
+                const isBlocked = conversationData?.blocked;
+                const blockedBy = conversationData?.blockedBy;
+                const isBlockedByMe = blockedBy === this.data.currentUser.email;
+                
+                // Render header with block/unblock button
+                header.innerHTML = `
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="flex items-center gap-3">
+                            <button onclick="window.app.navigate('messages')" class="text-gray-400 hover:text-white">
+                                <i class="fa-solid fa-arrow-left"></i>
+                            </button>
+                            <img src="${otherUserData?.pic || `https://ui-avatars.com/api/?name=${encodeURIComponent(otherUserData?.displayName || otherUserData?.tag || 'User')}&background=10b981&color=fff&size=64`}" 
+                                 class="w-10 h-10 rounded-full object-cover">
+                            <div>
+                                <div class="text-white font-bold">${otherUserData?.displayName || otherUserData?.tag || 'Unknown'}</div>
+                                <div class="text-xs text-gray-400">@${otherUserData?.tag || 'unknown'}</div>
+                            </div>
+                        </div>
+                        <button onclick="window.app.toggleBlock('${conversationId}', '${otherUser}')" 
+                                class="px-4 py-2 rounded-lg ${isBlocked ? 'bg-red-600 hover:bg-red-500' : 'bg-gray-700 hover:bg-gray-600'} text-white text-sm font-bold transition-colors">
+                            ${isBlocked ? (isBlockedByMe ? 'Unblock' : 'Blocked') : 'Block'}
+                        </button>
+                    </div>
+                `;
+                
+                // Load messages
+                const messagesSnapshot = await db.collection('conversations').doc(conversationId)
+                    .collection('messages')
+                    .orderBy('timestamp', 'asc')
+                    .get();
+                
+                const messages = [];
+                messagesSnapshot.forEach(doc => {
+                    messages.push({ id: doc.id, ...doc.data() });
+                });
+                
+                if (messages.length === 0) {
+                    messagesContainer.innerHTML = '<div class="text-center text-gray-500 py-8">No messages yet. Start the conversation!</div>';
+                } else {
+                    messagesContainer.innerHTML = messages.map(msg => {
+                        const isMe = msg.sender === this.data.currentUser.email;
+                        return `
+                            <div class="flex ${isMe ? 'justify-end' : 'justify-start'} mb-4">
+                                <div class="max-w-[70%] ${isMe ? 'bg-green-600 text-black' : 'bg-gray-700 text-white'} rounded-lg p-3">
+                                    ${msg.image ? `<img src="${msg.image}" class="mb-2 max-h-48 rounded cursor-pointer" onclick="window.app.openImageViewer('${msg.image}', 'Message Image')">` : ''}
+                                    <div class="text-sm">${msg.text}</div>
+                                    <div class="text-xs ${isMe ? 'text-green-800' : 'text-gray-400'} mt-1 text-right">
+                                        ${this.formatDateTime(msg.timestamp)}
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                    
+                    // Scroll to bottom
+                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                }
+                
+                // Render input area (disabled if blocked)
+                const inputContainer = document.getElementById('chatInputContainer');
+                if (inputContainer) {
+                    if (isBlocked) {
+                        inputContainer.innerHTML = `
+                            <div class="p-4 bg-red-900/30 border border-red-500/30 rounded-lg text-center text-red-400">
+                                ${isBlockedByMe ? 'You have blocked this user. Unblock to send messages.' : 'You have been blocked by this user.'}
+                            </div>
+                        `;
+                    } else {
+                        inputContainer.innerHTML = `
+                            <div class="flex gap-2">
+                                <input type="text" id="chatMessageInput" placeholder="Type a message..." 
+                                       class="flex-1 bg-gray-800 border border-gray-700 rounded-lg p-3 text-white focus:border-green-500 focus:outline-none"
+                                       onkeypress="if(event.key === 'Enter') window.app.sendChatMessage('${conversationId}')">
+                                <input type="url" id="chatImageInput" placeholder="Image URL..." 
+                                       class="w-32 bg-gray-800 border border-gray-700 rounded-lg p-3 text-white text-sm focus:border-green-500 focus:outline-none">
+                                <button onclick="window.app.sendChatMessage('${conversationId}')" 
+                                        class="bg-green-600 hover:bg-green-500 text-black font-bold px-6 rounded-lg transition-colors">
+                                    <i class="fa-solid fa-paper-plane"></i>
+                                </button>
+                            </div>
+                        `;
+                    }
+                }
+                
+                // Mark messages as read
+                messagesSnapshot.forEach(async doc => {
+                    const msg = doc.data();
+                    if (msg.sender !== this.data.currentUser.email && !msg.read) {
+                        await db.collection('conversations').doc(conversationId)
+                            .collection('messages').doc(doc.id).update({ read: true });
+                    }
+                });
+            },
+            
+            async sendChatMessage(conversationId) {
+                const input = document.getElementById('chatMessageInput');
+                const imageInput = document.getElementById('chatImageInput');
+                
+                const text = input?.value.trim();
+                const image = imageInput?.value.trim() || '';
+                
+                if (!text) return;
+                
+                try {
+                    // Check suspension
+                    if (await this.isUserSuspended(this.data.currentUser.email)) {
+                        this.showToast('Your account is suspended. You cannot send messages.', 'error');
+                        return;
+                    }
+                    
+                    await db.collection('conversations').doc(conversationId).collection('messages').add({
+                        text: text,
+                        image: image,
+                        sender: this.data.currentUser.email,
+                        timestamp: Date.now(),
+                        read: false
+                    });
+                    
+                    await db.collection('conversations').doc(conversationId).update({
+                        lastMessage: text,
+                        lastMessageAt: Date.now()
+                    });
+                    
+                    if (input) input.value = '';
+                    if (imageInput) imageInput.value = '';
+                    
+                    // Refresh chat
+                    this.renderChat(this.data.currentChat);
+                } catch (error) {
+                    console.error('Error sending message:', error);
+                    this.showToast('Error sending message', 'error');
+                }
+            },
+            
+            async toggleBlock(conversationId, otherUser) {
+                const conversationDoc = await db.collection('conversations').doc(conversationId).get();
+                if (!conversationDoc.exists) return;
+                
+                const data = conversationDoc.data();
+                
+                if (data.blocked) {
+                    if (data.blockedBy === this.data.currentUser.email) {
+                        // Unblock
+                        await db.collection('conversations').doc(conversationId).update({
+                            blocked: false,
+                            blockedBy: null
+                        });
+                        this.showToast('User unblocked');
+                    } else {
+                        this.showToast('You cannot unblock. The other user blocked you.', 'error');
+                    }
+                } else {
+                    // Block
+                    await db.collection('conversations').doc(conversationId).update({
+                        blocked: true,
+                        blockedBy: this.data.currentUser.email
+                    });
+                    this.showToast('User blocked');
+                }
+                
+                // Refresh chat
+                this.renderChat(this.data.currentChat);
+            },
+
+            // ==========================================
+            // ADMIN SUSPEND FUNCTIONALITY
+            // ==========================================
+            
+            showSuspendModal(targetEmail) {
+                const modal = document.getElementById('suspendModal');
+                const title = document.getElementById('suspendModalTitle');
+                const daysInput = document.getElementById('suspendDaysInput');
+                const hoursInput = document.getElementById('suspendHoursInput');
+                const submitBtn = document.getElementById('suspendSubmitBtn');
+                
+                const user = this.data.users.find(u => u.email === targetEmail);
+                const isCurrentlySuspended = user?.suspended && user.suspended.until > Date.now();
+                
+                if (modal && title && daysInput && hoursInput && submitBtn) {
+                    modal.classList.remove('hidden');
+                    modal.setAttribute('data-target-email', targetEmail);
+                    
+                    if (isCurrentlySuspended) {
+                        title.innerText = 'Edit Suspension';
+                        submitBtn.innerText = 'Update Suspension';
+                        // Pre-fill current values
+                        const remaining = this.getRemainingSuspensionTime(targetEmail);
+                        if (remaining) {
+                            daysInput.value = remaining.days;
+                            hoursInput.value = remaining.hours;
+                        }
+                    } else {
+                        title.innerText = 'Suspend User';
+                        submitBtn.innerText = 'Suspend User';
+                        daysInput.value = '';
+                        hoursInput.value = '';
+                    }
+                    
+                    submitBtn.onclick = () => this.suspendUser(targetEmail);
+                }
+            },
+            
+            closeSuspendModal() {
+                const modal = document.getElementById('suspendModal');
+                if (modal) {
+                    modal.classList.add('hidden');
+                    modal.removeAttribute('data-target-email');
+                }
+            },
+            
+            async suspendUser(targetEmail) {
+                const daysInput = document.getElementById('suspendDaysInput');
+                const hoursInput = document.getElementById('suspendHoursInput');
+                
+                const days = parseInt(daysInput?.value) || 0;
+                const hours = parseInt(hoursInput?.value) || 0;
+                
+                if (days === 0 && hours === 0) {
+                    this.showToast('Please enter suspension duration', 'error');
+                    return;
+                }
+                
+                const totalMs = (days * 24 * 60 * 60 * 1000) + (hours * 60 * 60 * 1000);
+                const until = Date.now() + totalMs;
+                
+                try {
+                    await db.collection('users').doc(targetEmail).update({
+                        suspended: {
+                            until: until,
+                            days: days,
+                            hours: hours,
+                            suspendedBy: this.data.currentUser.email,
+                            suspendedAt: Date.now()
+                        }
+                    });
+                    
+                    this.closeSuspendModal();
+                    this.showToast(`User suspended for ${days} days and ${hours} hours`);
+                    this.renderProfile(targetEmail);
+                } catch (error) {
+                    console.error('Error suspending user:', error);
+                    this.showToast('Error suspending user', 'error');
+                }
             },
 
             // ==========================================
@@ -1207,10 +1921,13 @@
                 const profileFollowing = document.getElementById('profileFollowing');
                 const editSection = document.getElementById('editProfileSection');
                 const followBtn = document.getElementById('followBtn');
+                const messageBtn = document.getElementById('messageBtn');
                 const userPostsContainer = document.getElementById('userPostsContainer');
                 const emailDisplay = document.getElementById('profileEmailDisplay');
                 const notificationBtn = document.getElementById('notificationBtn');
                 const countryDisplay = document.getElementById('profileCountryDisplay');
+                const suspendBtn = document.getElementById('suspendBtn');
+                const suspendCountdown = document.getElementById('suspendCountdown');
 
                 if (profileName) profileName.innerText = user.displayName || user.tag || 'User';
                 if (profileTag) profileTag.innerText = '@' + (user.tag || 'unknown');
@@ -1263,6 +1980,47 @@
 
                 const isOwner = this.data.currentUser?.email === email;
                 const isAdmin = this.admins.includes(this.data.currentUser?.email);
+                const isAdminViewing = isAdmin && !isOwner;
+
+                // Show suspend button only for admins viewing other users
+                if (suspendBtn) {
+                    if (isAdminViewing) {
+                        suspendBtn.classList.remove('hidden');
+                        const isSuspended = user.suspended && user.suspended.until > Date.now();
+                        suspendBtn.innerText = isSuspended ? 'Edit Suspension' : 'Suspend User';
+                        suspendBtn.onclick = () => this.showSuspendModal(email);
+                    } else {
+                        suspendBtn.classList.add('hidden');
+                    }
+                }
+
+                // Show suspension countdown for suspended users (visible to self and admins)
+                if (suspendCountdown) {
+                    const remaining = this.getRemainingSuspensionTime(email);
+                    if (remaining && (isOwner || isAdmin)) {
+                        suspendCountdown.classList.remove('hidden');
+                        this.updateSuspendCountdown(suspendCountdown, remaining);
+                        
+                        // Update countdown every second
+                        if (this.suspendCountdownInterval) {
+                            clearInterval(this.suspendCountdownInterval);
+                        }
+                        this.suspendCountdownInterval = setInterval(() => {
+                            const newRemaining = this.getRemainingSuspensionTime(email);
+                            if (newRemaining) {
+                                this.updateSuspendCountdown(suspendCountdown, newRemaining);
+                            } else {
+                                suspendCountdown.classList.add('hidden');
+                                clearInterval(this.suspendCountdownInterval);
+                                if (isAdminViewing && suspendBtn) {
+                                    suspendBtn.innerText = 'Suspend User';
+                                }
+                            }
+                        }, 1000);
+                    } else {
+                        suspendCountdown.classList.add('hidden');
+                    }
+                }
 
                 if (notificationBtn) {
                     if (isOwner) {
@@ -1275,6 +2033,7 @@
                 if (isOwner) {
                     editSection?.classList.remove('hidden');
                     followBtn?.classList.add('hidden');
+                    messageBtn?.classList.add('hidden');
                     
                     const editTagInput = document.getElementById('editTagInput');
                     const editDisplayNameInput = document.getElementById('editDisplayNameInput');
@@ -1292,6 +2051,15 @@
                     }
                 } else {
                     editSection?.classList.add('hidden');
+                    
+                    // Show message button for logged in users viewing others
+                    if (this.data.currentUser && messageBtn) {
+                        messageBtn.classList.remove('hidden');
+                        messageBtn.onclick = () => this.startMessage(email);
+                    } else {
+                        messageBtn?.classList.add('hidden');
+                    }
+                    
                     if (this.data.currentUser && followBtn) {
                         followBtn.classList.remove('hidden');
                         const currentUserData = this.data.users.find(u => u.email === this.data.currentUser.email);
@@ -1323,8 +2091,10 @@
                                 if (post.dislikesList?.includes(this.data.currentUser.email)) userLikeStatus = 'dislike';
                             }
                             
-                            // Use same comments rendering as homepage
-                            const commentsHtml = this.renderCommentsSection(post, isAdmin);
+                            // Use same comments rendering as homepage with highlight support
+                            const highlightComment = this.data.highlightedComment;
+                            const highlightReply = this.data.highlightedReply;
+                            const commentsHtml = this.renderCommentsSection(post, isAdmin, null, highlightComment, highlightReply ? [highlightReply] : null);
                             
                             const postImageHtml = post.image ? `
                                 <div class="mb-3 bg-gray-800 rounded overflow-hidden cursor-pointer" onclick="window.app.openImageViewer('${post.image}', '${post.title.replace(/'/g, "\\'")}')">
@@ -1366,6 +2136,22 @@
                         });
                     }
                 }
+            },
+            
+            updateSuspendCountdown(element, remaining) {
+                element.innerHTML = `
+                    <div class="bg-red-900/30 border border-red-500/50 rounded-lg p-3 mb-4">
+                        <div class="text-red-400 text-sm font-bold mb-1">
+                            <i class="fa-solid fa-ban mr-2"></i>Account Suspended
+                        </div>
+                        <div class="text-white text-lg font-mono">
+                            ${remaining.days}d ${remaining.hours}h ${remaining.minutes}m remaining
+                        </div>
+                        <div class="text-xs text-gray-400 mt-1">
+                            You can only like, dislike, follow, and unfollow during suspension.
+                        </div>
+                    </div>
+                `;
             },
 
             async saveProfile() {
@@ -1521,6 +2307,15 @@
                         const targetUserIndex = this.data.users.findIndex(u => u.email === targetEmail);
                         if (targetUserIndex !== -1) {
                             this.data.users[targetUserIndex].followers = newFollowers;
+                        }
+                        
+                        // Check if mutual follow - if so, auto-accept any pending conversation
+                        if (newFollowing.includes(targetEmail) && newFollowers.includes(this.data.currentUser.email)) {
+                            const conversationId = this.getConversationId(this.data.currentUser.email, targetEmail);
+                            const convDoc = await db.collection('conversations').doc(conversationId).get();
+                            if (convDoc.exists && convDoc.data().status === 'pending') {
+                                await db.collection('conversations').doc(conversationId).update({ status: 'accepted' });
+                            }
                         }
                         
                         this.showToast(`You are now following ${targetData.tag}`);
@@ -1777,7 +2572,9 @@
                             createdAt: Date.now(),
                             country: 'US',
                             timezone: 'America/New_York',
-                            lastTagChange: null
+                            lastTagChange: null,
+                            suspended: null,
+                            blockedUsers: []
                         });
                         
                         this.showToast('Account created successfully! You are now logged in.');
@@ -1846,6 +2643,10 @@
                         const commentModal = document.getElementById('commentModal');
                         const replyModal = document.getElementById('replyModal');
                         const imageViewer = document.getElementById('imageViewer');
+                        const messageRequestModal = document.getElementById('messageRequestModal');
+                        const acceptRejectModal = document.getElementById('acceptRejectModal');
+                        const pendingRequestModal = document.getElementById('pendingRequestModal');
+                        const suspendModal = document.getElementById('suspendModal');
                         
                         if (imageViewer && !imageViewer.classList.contains('hidden')) {
                             this.closeImageViewer();
@@ -1859,6 +2660,18 @@
                         }
                         if (replyModal && !replyModal.classList.contains('hidden')) {
                             this.closeReplyModal();
+                        }
+                        if (messageRequestModal && !messageRequestModal.classList.contains('hidden')) {
+                            this.closeMessageRequestModal();
+                        }
+                        if (acceptRejectModal && !acceptRejectModal.classList.contains('hidden')) {
+                            this.closeAcceptRejectModal();
+                        }
+                        if (pendingRequestModal && !pendingRequestModal.classList.contains('hidden')) {
+                            this.closePendingRequestModal();
+                        }
+                        if (suspendModal && !suspendModal.classList.contains('hidden')) {
+                            this.closeSuspendModal();
                         }
                     }
                 });
@@ -2041,6 +2854,24 @@
             color: #9ca3af;
             line-height: 1.6;
         }
+
+        /* Chat styles */
+        .chat-container {
+            display: flex;
+            flex-direction: column;
+            height: 70vh;
+        }
+        
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+        }
+        
+        .chat-input {
+            padding: 1rem;
+            border-top: 1px solid rgba(255,255,255,0.1);
+        }
     </style>
 </head>
 <body class="min-h-screen flex flex-col relative">
@@ -2103,6 +2934,7 @@
                         <button onclick="window.app.navigate('home')" class="hover:bg-gray-800 px-3 py-2 rounded-md text-sm font-medium transition-colors">Home</button>
                         <button onclick="window.app.navigate('profile')" class="hover:bg-gray-800 px-3 py-2 rounded-md text-sm font-medium transition-colors">Profile</button>
                         <button onclick="window.app.navigate('search')" class="hover:bg-gray-800 px-3 py-2 rounded-md text-sm font-medium transition-colors">Find Users</button>
+                        <button onclick="window.app.navigate('messages')" class="hover:bg-gray-800 px-3 py-2 rounded-md text-sm font-medium transition-colors">Messages</button>
                     </div>
                 </div>
                 <div class="flex items-center gap-4">
@@ -2221,6 +3053,9 @@
         </div>
 
         <div id="profileView" class="hidden max-w-4xl mx-auto">
+            <!-- Suspension Countdown (visible to suspended user and admins) -->
+            <div id="suspendCountdown" class="hidden"></div>
+            
             <div class="glass-panel rounded-2xl p-8 mb-8 border border-gray-700 relative overflow-hidden">
                 <div class="absolute top-0 left-0 w-full h-24 bg-gradient-to-r from-green-900/50 to-blue-900/50"></div>
                 <div class="relative z-10 flex flex-col md:flex-row items-center md:items-end gap-6 mt-8">
@@ -2255,7 +3090,13 @@
                             <i class="fa-solid fa-bell text-white text-xl"></i>
                             <span id="notificationBadge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">0</span>
                         </button>
+                        <button id="messageBtn" onclick="window.app.startMessage()" class="hidden px-6 py-2 rounded-full bg-blue-600 text-white font-bold hover:bg-blue-500 transition-colors flex items-center gap-2">
+                            <i class="fa-solid fa-message"></i> Message
+                        </button>
                         <button id="followBtn" onclick="window.app.toggleFollow()" class="hidden px-6 py-2 rounded-full bg-white text-black font-bold hover:bg-gray-200 transition-colors">Follow</button>
+                        <button id="suspendBtn" onclick="window.app.showSuspendModal()" class="hidden px-6 py-2 rounded-full bg-red-600 text-white font-bold hover:bg-red-500 transition-colors">
+                            Suspend User
+                        </button>
                     </div>
                 </div>
             </div>
@@ -2339,6 +3180,32 @@
                         <i class="fa-solid fa-clock mr-1"></i> Notifications expire after 24 hours
                     </p>
                 </div>
+            </div>
+        </div>
+
+        <!-- Messages List View -->
+        <div id="messagesView" class="hidden max-w-2xl mx-auto">
+            <div class="glass-panel rounded-2xl p-8 border border-gray-700">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-bold text-white flex items-center gap-2">
+                        <i class="fa-solid fa-message text-green-400"></i> Messages
+                    </h2>
+                    <button onclick="window.app.navigate('home')" class="text-gray-400 hover:text-white">
+                        <i class="fa-solid fa-times text-xl"></i>
+                    </button>
+                </div>
+                <div id="messagesListContainer" class="space-y-3">
+                    <div class="text-center text-gray-500 py-8">Loading conversations...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chat View -->
+        <div id="chatView" class="hidden max-w-2xl mx-auto">
+            <div id="chatContainer" class="glass-panel rounded-2xl border border-gray-700 hidden chat-container">
+                <div id="chatHeader" class="p-4 border-b border-gray-700"></div>
+                <div id="chatMessages" class="chat-messages"></div>
+                <div id="chatInputContainer" class="chat-input"></div>
             </div>
         </div>
 
@@ -2487,6 +3354,88 @@
                 <div class="flex gap-3">
                     <button onclick="window.app.closeReplyModal()" class="flex-1 py-2 rounded-lg border border-gray-600 text-gray-300 hover:bg-gray-800 transition-colors">Cancel</button>
                     <button id="submitReplyBtn" class="flex-1 py-2 rounded-lg bg-green-600 text-black font-bold hover:bg-green-500 transition-colors">Post Reply</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Message Request Modal -->
+    <div id="messageRequestModal" class="fixed inset-0 z-[100] hidden">
+        <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" onclick="window.app.closeMessageRequestModal()"></div>
+        <div class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-full max-w-md p-1">
+            <div class="bg-gray-900 border border-gray-700 rounded-2xl p-6 shadow-2xl">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-xl font-bold text-white">Send Message Request</h3>
+                    <button onclick="window.app.closeMessageRequestModal()" class="text-gray-400 hover:text-white"><i class="fa-solid fa-times"></i></button>
+                </div>
+                <p class="text-gray-400 text-sm mb-4">Send a message to start a conversation. The user will need to accept your request.</p>
+                <textarea id="messageRequestInput" rows="4" placeholder="Write your message..." class="w-full bg-black border border-gray-700 rounded-lg p-3 text-white focus:border-green-500 focus:outline-none mb-4"></textarea>
+                <input type="url" id="messageRequestImageInput" placeholder="Image URL (optional)..." class="w-full bg-black border border-gray-700 rounded-lg p-3 text-white focus:border-green-500 focus:outline-none mb-4 text-sm">
+                <div class="flex gap-3">
+                    <button onclick="window.app.closeMessageRequestModal()" class="flex-1 py-2 rounded-lg border border-gray-600 text-gray-300 hover:bg-gray-800 transition-colors">Cancel</button>
+                    <button id="sendMessageRequestBtn" class="flex-1 py-2 rounded-lg bg-blue-600 text-white font-bold hover:bg-blue-500 transition-colors">Send Message</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Accept/Reject Modal -->
+    <div id="acceptRejectModal" class="fixed inset-0 z-[100] hidden">
+        <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" onclick="window.app.closeAcceptRejectModal()"></div>
+        <div class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-full max-w-md p-1">
+            <div class="bg-gray-900 border border-gray-700 rounded-2xl p-6 shadow-2xl">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-xl font-bold text-white">Message Request</h3>
+                    <button onclick="window.app.closeAcceptRejectModal()" class="text-gray-400 hover:text-white"><i class="fa-solid fa-times"></i></button>
+                </div>
+                <p id="acceptRejectText" class="text-gray-300 text-sm mb-4"></p>
+                <div class="flex gap-3">
+                    <button onclick="window.app.closeAcceptRejectModal()" class="flex-1 py-2 rounded-lg border border-gray-600 text-gray-300 hover:bg-gray-800 transition-colors">Cancel</button>
+                    <button id="rejectRequestBtn" class="flex-1 py-2 rounded-lg bg-red-600 text-white font-bold hover:bg-red-500 transition-colors">Reject</button>
+                    <button id="acceptRequestBtn" class="flex-1 py-2 rounded-lg bg-green-600 text-black font-bold hover:bg-green-500 transition-colors">Accept</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pending Request Modal -->
+    <div id="pendingRequestModal" class="fixed inset-0 z-[100] hidden">
+        <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" onclick="window.app.closePendingRequestModal()"></div>
+        <div class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-full max-w-md p-1">
+            <div class="bg-gray-900 border border-gray-700 rounded-2xl p-6 shadow-2xl">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-xl font-bold text-white">Request Pending</h3>
+                    <button onclick="window.app.closePendingRequestModal()" class="text-gray-400 hover:text-white"><i class="fa-solid fa-times"></i></button>
+                </div>
+                <p id="pendingRequestText" class="text-gray-300 text-sm mb-4"></p>
+                <button onclick="window.app.closePendingRequestModal()" class="w-full py-2 rounded-lg bg-gray-700 text-white hover:bg-gray-600 transition-colors">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Suspend User Modal -->
+    <div id="suspendModal" class="fixed inset-0 z-[100] hidden">
+        <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" onclick="window.app.closeSuspendModal()"></div>
+        <div class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-full max-w-md p-1">
+            <div class="bg-gray-900 border border-gray-700 rounded-2xl p-6 shadow-2xl">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 id="suspendModalTitle" class="text-xl font-bold text-white">Suspend User</h3>
+                    <button onclick="window.app.closeSuspendModal()" class="text-gray-400 hover:text-white"><i class="fa-solid fa-times"></i></button>
+                </div>
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1">Days</label>
+                        <input type="number" id="suspendDaysInput" min="0" placeholder="0" class="w-full bg-black border border-gray-700 rounded-lg p-3 text-white focus:border-red-500 focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1">Hours</label>
+                        <input type="number" id="suspendHoursInput" min="0" max="23" placeholder="0" class="w-full bg-black border border-gray-700 rounded-lg p-3 text-white focus:border-red-500 focus:outline-none">
+                    </div>
+                </div>
+                <p class="text-gray-500 text-xs mb-4">Example: 50 days / 24 hours = 50 days and 24 hours suspension</p>
+                <div class="flex gap-3">
+                    <button onclick="window.app.closeSuspendModal()" class="flex-1 py-2 rounded-lg border border-gray-600 text-gray-300 hover:bg-gray-800 transition-colors">Cancel</button>
+                    <button id="suspendSubmitBtn" class="flex-1 py-2 rounded-lg bg-red-600 text-white font-bold hover:bg-red-500 transition-colors">Suspend User</button>
                 </div>
             </div>
         </div>
