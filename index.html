@@ -529,7 +529,7 @@
                         const isHighlighted = highlightCommentIndex === index;
                         const highlightClass = isHighlighted ? 'bg-gray-600/50 ring-2 ring-gray-400/50' : 'bg-gray-800/30';
                         
-                        // Render replies with nesting support
+                        // Render replies with nesting support - FIXED: Pass the comment index for proper grouping
                         const repliesHtml = this.renderRepliesRecursive(
                             c.replies || [], 
                             post.id, 
@@ -537,7 +537,8 @@
                             isAdmin, 
                             '', 
                             0,
-                            highlightReplyIndices
+                            highlightReplyIndices,
+                            null // parentReplyIndex is null for top-level replies (direct replies to comment)
                         );
                         
                         const canDeleteComment = isAdmin || this.data.currentUser?.tag === c.user;
@@ -581,82 +582,58 @@
                 return commentsHtml;
             },
 
-            // New recursive function to render nested replies
-            renderRepliesRecursive(replies, postId, commentIndex, isAdmin, parentPath, depth, highlightReplyIndices) {
+            // FIXED: Recursive function to render nested replies with correct parent-child relationships
+            renderRepliesRecursive(replies, postId, commentIndex, isAdmin, parentPath, depth, highlightReplyIndices, parentReplyIndex) {
                 if (!replies || replies.length === 0) return '';
                 
-                // Sort replies by timestamp (newest first)
-                const sortedReplies = [...replies].sort((a, b) => b.timestamp - a.timestamp);
+                // Sort replies by timestamp (oldest first to maintain thread order)
+                const sortedReplies = [...replies].sort((a, b) => a.timestamp - b.timestamp);
                 
-                // Group replies by parent
-                const topLevelReplies = sortedReplies.filter(r => !r.parentReplyIndex && r.parentReplyIndex !== 0);
-                const nestedReplies = sortedReplies.filter(r => r.parentReplyIndex !== undefined && r.parentReplyIndex !== null);
+                // Build a map of replies by their index for quick lookup
+                const replyMap = new Map();
+                sortedReplies.forEach((reply, idx) => {
+                    replyMap.set(idx, { ...reply, originalIndex: idx });
+                });
                 
-                // Build reply tree
-                const buildReplyTree = (parentIndex) => {
-                    const children = nestedReplies.filter(r => r.parentReplyIndex === parentIndex);
-                    return children.map((child, idx) => {
-                        const childIndex = sortedReplies.indexOf(child);
-                        const replyId = `reply-${postId}-${commentIndex}-${parentPath}${childIndex}`;
-                        const isExpanded = this.data.expandedReplies.has(replyId);
-                        const hasChildren = nestedReplies.some(r => r.parentReplyIndex === childIndex);
-                        
-                        const canDeleteReply = isAdmin || this.data.currentUser?.tag === child.user;
-                        const isHighlighted = highlightReplyIndices && highlightReplyIndices.includes(childIndex);
-                        const highlightClass = isHighlighted ? 'bg-gray-600/50 ring-2 ring-gray-400/50' : '';
-                        
-                        // Recursively get children of this reply
-                        const childrenHtml = hasChildren && isExpanded ? 
-                            buildReplyTree(childIndex) : '';
-                        
-                        const showRepliesBtn = hasChildren ? `
-                            <button onclick="window.app.toggleReplies('${replyId}')" class="text-xs text-blue-400 hover:text-blue-300 mt-1 font-medium">
-                                ${isExpanded ? 'Hide Replies ↑' : `Show Replies (${nestedReplies.filter(r => r.parentReplyIndex === childIndex).length}) ↓`}
-                            </button>
-                        ` : '';
-                        
-                        return `
-                            <div class="text-xs text-gray-400 p-2 rounded ${highlightClass} mt-2" id="${replyId}">
-                                <div class="flex items-start gap-2">
-                                    <span class="text-green-400 font-bold cursor-pointer hover:underline" 
-                                          onclick="window.app.navigate('profile', '${this.getUserEmailByTag(child.user)}')">@${child.user}</span>
-                                    <span class="text-gray-500">${this.formatDateTime(child.timestamp)}</span>
-                                </div>
-                                <div class="mt-1">${this.formatCommentText(child.text)}</div>
-                                ${child.image ? `<img src="${child.image}" class="mt-2 max-h-32 rounded cursor-pointer hover:opacity-80" onclick="window.app.openImageViewer('${child.image}', 'Reply Image')">` : ''}
-                                <div class="flex gap-2 mt-1">
-                                    <button onclick="window.app.showReplyModal('${postId}', ${commentIndex}, ${childIndex}, '${child.user}')" 
-                                            class="text-xs text-blue-400 hover:text-blue-300">Reply</button>
-                                    ${canDeleteReply ? `
-                                    <button onclick="window.app.deleteReply('${postId}', ${commentIndex}, ${child.timestamp})" 
-                                            class="text-xs text-red-400 hover:text-red-300">Delete</button>
-                                    ` : ''}
-                                </div>
-                                ${showRepliesBtn}
-                                ${childrenHtml ? `<div class="ml-4 mt-2 pl-3 border-l-2 border-gray-700 space-y-2">${childrenHtml}</div>` : ''}
-                            </div>
-                        `;
-                    }).join('');
-                };
+                // Build parent-child relationships
+                const childrenMap = new Map(); // parentIndex -> [childIndices]
+                const rootReplies = []; // Replies with no parent (direct replies to comment)
                 
-                // Render top-level replies
-                const topLevelHtml = topLevelReplies.map((r, idx) => {
-                    const replyIndex = sortedReplies.indexOf(r);
-                    const replyId = `reply-${postId}-${commentIndex}-${parentPath}${replyIndex}`;
-                    const isExpanded = this.data.expandedReplies.has(replyId);
-                    const hasChildren = nestedReplies.some(nr => nr.parentReplyIndex === replyIndex);
+                sortedReplies.forEach((reply, idx) => {
+                    const parentIdx = reply.parentReplyIndex;
+                    if (parentIdx === null || parentIdx === undefined) {
+                        // This is a direct reply to the comment
+                        rootReplies.push(idx);
+                    } else {
+                        // This is a reply to another reply
+                        if (!childrenMap.has(parentIdx)) {
+                            childrenMap.set(parentIdx, []);
+                        }
+                        childrenMap.get(parentIdx).push(idx);
+                    }
+                });
+                
+                // Recursive function to render a reply and its children
+                const renderReply = (replyIdx, currentDepth) => {
+                    const reply = replyMap.get(replyIdx);
+                    if (!reply) return '';
                     
-                    const canDeleteReply = isAdmin || this.data.currentUser?.tag === r.user;
-                    const isHighlighted = highlightReplyIndices && highlightReplyIndices.includes(replyIndex);
+                    const replyId = `reply-${postId}-${commentIndex}-${parentPath}${replyIdx}`;
+                    const isExpanded = this.data.expandedReplies.has(replyId);
+                    const childIndices = childrenMap.get(replyIdx) || [];
+                    const hasChildren = childIndices.length > 0;
+                    
+                    const canDeleteReply = isAdmin || this.data.currentUser?.tag === reply.user;
+                    const isHighlighted = highlightReplyIndices && highlightReplyIndices.includes(replyIdx);
                     const highlightClass = isHighlighted ? 'bg-gray-600/50 ring-2 ring-gray-400/50' : '';
                     
-                    // Get children recursively
+                    // Render children recursively
                     const childrenHtml = hasChildren && isExpanded ? 
-                        buildReplyTree(replyIndex) : '';
+                        childIndices.map(childIdx => renderReply(childIdx, currentDepth + 1)).join('') : '';
                     
                     const showRepliesBtn = hasChildren ? `
                         <button onclick="window.app.toggleReplies('${replyId}')" class="text-xs text-blue-400 hover:text-blue-300 mt-1 font-medium">
-                            ${isExpanded ? 'Hide Replies ↑' : `Show Replies (${nestedReplies.filter(nr => nr.parentReplyIndex === replyIndex).length}) ↓`}
+                            ${isExpanded ? 'Hide Replies ↑' : `Show Replies (${childIndices.length}) ↓`}
                         </button>
                     ` : '';
                     
@@ -664,16 +641,16 @@
                         <div class="text-xs text-gray-400 p-2 rounded ${highlightClass} mt-2" id="${replyId}">
                             <div class="flex items-start gap-2">
                                 <span class="text-green-400 font-bold cursor-pointer hover:underline" 
-                                      onclick="window.app.navigate('profile', '${this.getUserEmailByTag(r.user)}')">@${r.user}</span>
-                                <span class="text-gray-500">${this.formatDateTime(r.timestamp)}</span>
+                                      onclick="window.app.navigate('profile', '${this.getUserEmailByTag(reply.user)}')">@${reply.user}</span>
+                                <span class="text-gray-500">${this.formatDateTime(reply.timestamp)}</span>
                             </div>
-                            <div class="mt-1">${this.formatCommentText(r.text)}</div>
-                            ${r.image ? `<img src="${r.image}" class="mt-2 max-h-32 rounded cursor-pointer hover:opacity-80" onclick="window.app.openImageViewer('${r.image}', 'Reply Image')">` : ''}
+                            <div class="mt-1">${this.formatCommentText(reply.text)}</div>
+                            ${reply.image ? `<img src="${reply.image}" class="mt-2 max-h-32 rounded cursor-pointer hover:opacity-80" onclick="window.app.openImageViewer('${reply.image}', 'Reply Image')">` : ''}
                             <div class="flex gap-2 mt-1">
-                                <button onclick="window.app.showReplyModal('${postId}', ${commentIndex}, ${replyIndex}, '${r.user}')" 
+                                <button onclick="window.app.showReplyModal('${postId}', ${commentIndex}, ${replyIdx}, '${reply.user}')" 
                                         class="text-xs text-blue-400 hover:text-blue-300">Reply</button>
                                 ${canDeleteReply ? `
-                                <button onclick="window.app.deleteReply('${postId}', ${commentIndex}, ${r.timestamp})" 
+                                <button onclick="window.app.deleteReply('${postId}', ${commentIndex}, ${reply.timestamp})" 
                                         class="text-xs text-red-400 hover:text-red-300">Delete</button>
                                 ` : ''}
                             </div>
@@ -681,13 +658,16 @@
                             ${childrenHtml ? `<div class="ml-4 mt-2 pl-3 border-l-2 border-gray-700 space-y-2">${childrenHtml}</div>` : ''}
                         </div>
                     `;
-                }).join('');
+                };
                 
-                if (!topLevelHtml) return '';
+                // Render all root replies (direct replies to the comment)
+                const rootHtml = rootReplies.map(idx => renderReply(idx, 0)).join('');
+                
+                if (!rootHtml) return '';
                 
                 return `
                     <div class="ml-4 mt-2 pl-3 border-l-2 border-gray-700 space-y-2">
-                        ${topLevelHtml}
+                        ${rootHtml}
                     </div>
                 `;
             },
@@ -961,6 +941,7 @@
                 }
             },
 
+            // FIXED: handleVote now uses transaction to avoid permission issues
             async handleVote(postId, type) {
                 if (!this.data.currentUser) {
                     this.showToast('Login to vote', 'error');
@@ -969,51 +950,62 @@
 
                 try {
                     const postRef = db.collection('posts').doc(postId);
-                    const postDoc = await postRef.get();
                     
-                    if (!postDoc.exists) {
-                        this.showToast('Post not found', 'error');
-                        return;
-                    }
-                    
-                    const post = postDoc.data();
-                    const userEmail = this.data.currentUser.email;
-
-                    const likesList = post.likesList || [];
-                    const dislikesList = post.dislikesList || [];
-                    
-                    const hasLiked = likesList.includes(userEmail);
-                    const hasDisliked = dislikesList.includes(userEmail);
-
-                    const updates = {};
-
-                    if (type === 'like') {
-                        if (hasLiked) {
-                            updates.likesList = likesList.filter(e => e !== userEmail);
-                            updates.likes = Math.max((post.likes || 0) - 1, 0);
-                        } else {
-                            updates.likesList = [...likesList, userEmail];
-                            updates.likes = (post.likes || 0) + 1;
-                            if (hasDisliked) {
-                                updates.dislikesList = dislikesList.filter(e => e !== userEmail);
-                                updates.dislikes = Math.max((post.dislikes || 0) - 1, 0);
-                            }
+                    // Use transaction to ensure atomic update and avoid permission issues
+                    await db.runTransaction(async (transaction) => {
+                        const postDoc = await transaction.get(postRef);
+                        
+                        if (!postDoc.exists) {
+                            throw new Error('Post not found');
                         }
-                    } else if (type === 'dislike') {
-                        if (hasDisliked) {
-                            updates.dislikesList = dislikesList.filter(e => e !== userEmail);
-                            updates.dislikes = Math.max((post.dislikes || 0) - 1, 0);
-                        } else {
-                            updates.dislikesList = [...dislikesList, userEmail];
-                            updates.dislikes = (post.dislikes || 0) + 1;
+                        
+                        const post = postDoc.data();
+                        const userEmail = this.data.currentUser.email;
+
+                        const likesList = post.likesList || [];
+                        const dislikesList = post.dislikesList || [];
+                        
+                        const hasLiked = likesList.includes(userEmail);
+                        const hasDisliked = dislikesList.includes(userEmail);
+
+                        const updates = {};
+
+                        if (type === 'like') {
                             if (hasLiked) {
+                                // Remove like
                                 updates.likesList = likesList.filter(e => e !== userEmail);
                                 updates.likes = Math.max((post.likes || 0) - 1, 0);
+                            } else {
+                                // Add like
+                                updates.likesList = [...likesList, userEmail];
+                                updates.likes = (post.likes || 0) + 1;
+                                // Remove dislike if exists
+                                if (hasDisliked) {
+                                    updates.dislikesList = dislikesList.filter(e => e !== userEmail);
+                                    updates.dislikes = Math.max((post.dislikes || 0) - 1, 0);
+                                }
+                            }
+                        } else if (type === 'dislike') {
+                            if (hasDisliked) {
+                                // Remove dislike
+                                updates.dislikesList = dislikesList.filter(e => e !== userEmail);
+                                updates.dislikes = Math.max((post.dislikes || 0) - 1, 0);
+                            } else {
+                                // Add dislike
+                                updates.dislikesList = [...dislikesList, userEmail];
+                                updates.dislikes = (post.dislikes || 0) + 1;
+                                // Remove like if exists
+                                if (hasLiked) {
+                                    updates.likesList = likesList.filter(e => e !== userEmail);
+                                    updates.likes = Math.max((post.likes || 0) - 1, 0);
+                                }
                             }
                         }
-                    }
 
-                    await postRef.update(updates);
+                        transaction.update(postRef, updates);
+                    });
+                    
+                    // No need to manually refresh - the listener will update the UI
                 } catch (error) {
                     console.error('Error voting:', error);
                     this.showToast('Error voting: ' + error.message, 'error');
@@ -1080,23 +1072,26 @@
                 
                 try {
                     const postRef = db.collection('posts').doc(postId);
-                    const postDoc = await postRef.get();
                     
-                    if (!postDoc.exists) {
-                        this.showToast('Post not found', 'error');
-                        return;
-                    }
-                    
-                    const comments = postDoc.data().comments || [];
-                    const newComment = {
-                        user: this.data.currentUser.tag,
-                        text: text,
-                        image: image,
-                        timestamp: Date.now(),
-                        replies: []
-                    };
-                    comments.push(newComment);
-                    await postRef.update({ comments: comments });
+                    // Use transaction to safely update comments
+                    await db.runTransaction(async (transaction) => {
+                        const postDoc = await transaction.get(postRef);
+                        
+                        if (!postDoc.exists) {
+                            throw new Error('Post not found');
+                        }
+                        
+                        const comments = postDoc.data().comments || [];
+                        const newComment = {
+                            user: this.data.currentUser.tag,
+                            text: text,
+                            image: image,
+                            timestamp: Date.now(),
+                            replies: []
+                        };
+                        comments.push(newComment);
+                        transaction.update(postRef, { comments: comments });
+                    });
                     
                     // Process mentions for notifications
                     const mentions = text.match(/@(\w+)/g);
@@ -1127,14 +1122,18 @@
                 
                 try {
                     const postRef = db.collection('posts').doc(postId);
-                    const postDoc = await postRef.get();
                     
-                    if (!postDoc.exists) return;
+                    await db.runTransaction(async (transaction) => {
+                        const postDoc = await transaction.get(postRef);
+                        
+                        if (!postDoc.exists) return;
+                        
+                        const comments = postDoc.data().comments || [];
+                        comments.splice(commentIndex, 1);
+                        
+                        transaction.update(postRef, { comments: comments });
+                    });
                     
-                    const comments = postDoc.data().comments || [];
-                    comments.splice(commentIndex, 1);
-                    
-                    await postRef.update({ comments: comments });
                     this.showToast('Comment deleted');
                 } catch (error) {
                     console.error('Error deleting comment:', error);
@@ -1142,7 +1141,7 @@
                 }
             },
 
-            // Updated showReplyModal to support nested replies
+            // FIXED: showReplyModal now correctly passes the parentReplyIndex
             showReplyModal(postId, commentIndex, replyIndex, replyToUser) {
                 if (!this.data.currentUser) {
                     this.showToast('Please login to reply', 'error');
@@ -1167,8 +1166,10 @@
                         input.value = `@${replyToUser} `;
                         if (imageInput) imageInput.value = '';
                         input.focus();
-                        // Store the replyIndex in the modal for later use
-                        modal.setAttribute('data-reply-index', replyIndex !== null && replyIndex !== undefined ? replyIndex : '');
+                        // FIXED: Store the correct parentReplyIndex
+                        // If replyIndex is null, this is a reply to the comment itself
+                        // If replyIndex is a number, this is a reply to that specific reply
+                        modal.setAttribute('data-parent-reply-index', replyIndex !== null && replyIndex !== undefined ? replyIndex : '');
                         submitBtn.onclick = () => this.submitReply(postId, commentIndex, replyIndex, replyToUser);
                     }
                 });
@@ -1178,11 +1179,11 @@
                 const modal = document.getElementById('replyModal');
                 if (modal) {
                     modal.classList.add('hidden');
-                    modal.removeAttribute('data-reply-index');
+                    modal.removeAttribute('data-parent-reply-index');
                 }
             },
 
-            // Updated submitReply to support nested replies
+            // FIXED: submitReply now correctly handles parentReplyIndex for proper threading
             async submitReply(postId, commentIndex, parentReplyIndex, replyToUser) {
                 // Prevent double submission
                 if (this.data.submittingReply) return;
@@ -1205,33 +1206,47 @@
                 
                 try {
                     const postRef = db.collection('posts').doc(postId);
-                    const postDoc = await postRef.get();
                     
-                    if (!postDoc.exists) {
-                        this.showToast('Post not found', 'error');
-                        return;
-                    }
+                    // Use transaction for atomic update
+                    await db.runTransaction(async (transaction) => {
+                        const postDoc = await transaction.get(postRef);
+                        
+                        if (!postDoc.exists) {
+                            throw new Error('Post not found');
+                        }
+                        
+                        const post = postDoc.data();
+                        const comments = post.comments || [];
+                        
+                        if (!comments[commentIndex]) {
+                            throw new Error('Comment not found');
+                        }
+                        
+                        if (!comments[commentIndex].replies) {
+                            comments[commentIndex].replies = [];
+                        }
+                        
+                        // FIXED: Create reply with correct parentReplyIndex
+                        // parentReplyIndex should be:
+                        // - null if replying directly to the comment
+                        // - the index of the reply being replied to (within the replies array)
+                        const newReply = {
+                            user: this.data.currentUser.tag,
+                            text: text,
+                            image: image,
+                            timestamp: Date.now(),
+                            // FIXED: Store the correct parent index
+                            parentReplyIndex: parentReplyIndex !== null && parentReplyIndex !== undefined ? parentReplyIndex : null
+                        };
+                        
+                        comments[commentIndex].replies.push(newReply);
+                        transaction.update(postRef, { comments: comments });
+                    });
                     
-                    const comments = postDoc.data().comments || [];
-                    if (!comments[commentIndex]) {
-                        this.showToast('Comment not found', 'error');
-                        return;
-                    }
-                    
-                    if (!comments[commentIndex].replies) {
-                        comments[commentIndex].replies = [];
-                    }
-                    
-                    const newReply = {
-                        user: this.data.currentUser.tag,
-                        text: text,
-                        image: image,
-                        timestamp: Date.now(),
-                        parentReplyIndex: parentReplyIndex !== null && parentReplyIndex !== undefined ? parentReplyIndex : null
-                    };
-                    
-                    comments[commentIndex].replies.push(newReply);
-                    await postRef.update({ comments: comments });
+                    // Get the updated comment to find the new reply index for notification
+                    const updatedPost = await postRef.get();
+                    const updatedComments = updatedPost.data().comments || [];
+                    const newReplyIndex = (updatedComments[commentIndex]?.replies?.length || 1) - 1;
                     
                     // Process mentions for notifications
                     const mentions = text.match(/@(\w+)/g);
@@ -1240,7 +1255,7 @@
                             const tag = mention.substring(1);
                             const mentionedUser = this.data.users.find(u => u.tag === tag);
                             if (mentionedUser && mentionedUser.email !== this.data.currentUser.email) {
-                                await this.createNotification(mentionedUser.email, postId, this.data.currentUser.tag, 'reply', commentIndex, comments[commentIndex].replies.length - 1);
+                                await this.createNotification(mentionedUser.email, postId, this.data.currentUser.tag, 'reply', commentIndex, newReplyIndex);
                             }
                         }
                     }
@@ -1262,37 +1277,71 @@
                 
                 try {
                     const postRef = db.collection('posts').doc(postId);
-                    const postDoc = await postRef.get();
                     
-                    if (!postDoc.exists) return;
-                    
-                    const comments = postDoc.data().comments || [];
-                    if (!comments[commentIndex] || !comments[commentIndex].replies) return;
-                    
-                    // Find and remove the reply with matching timestamp
-                    const replyIndex = comments[commentIndex].replies.findIndex(r => r.timestamp === replyTimestamp);
-                    if (replyIndex === -1) return;
-                    
-                    // Also remove any replies that were replies to this reply (recursive deletion)
-                    const removeNestedReplies = (parentIndex) => {
-                        const nestedIndices = [];
-                        comments[commentIndex].replies.forEach((r, idx) => {
-                            if (r.parentReplyIndex === parentIndex) {
-                                nestedIndices.push(idx);
+                    await db.runTransaction(async (transaction) => {
+                        const postDoc = await transaction.get(postRef);
+                        
+                        if (!postDoc.exists) return;
+                        
+                        const comments = postDoc.data().comments || [];
+                        if (!comments[commentIndex] || !comments[commentIndex].replies) return;
+                        
+                        // Find the reply with matching timestamp
+                        const replyIndex = comments[commentIndex].replies.findIndex(r => r.timestamp === replyTimestamp);
+                        if (replyIndex === -1) return;
+                        
+                        // Build a map of all replies and their children
+                        const replies = comments[commentIndex].replies;
+                        const childrenMap = new Map();
+                        
+                        replies.forEach((r, idx) => {
+                            const parentIdx = r.parentReplyIndex;
+                            if (parentIdx !== null && parentIdx !== undefined) {
+                                if (!childrenMap.has(parentIdx)) {
+                                    childrenMap.set(parentIdx, []);
+                                }
+                                childrenMap.get(parentIdx).push(idx);
                             }
                         });
                         
-                        // Remove in reverse order to maintain indices
-                        nestedIndices.sort((a, b) => b - a).forEach(idx => {
-                            removeNestedReplies(idx); // Recursively remove children first
+                        // Collect all indices to delete (this reply and all its descendants)
+                        const indicesToDelete = [];
+                        const collectDescendants = (idx) => {
+                            indicesToDelete.push(idx);
+                            const children = childrenMap.get(idx) || [];
+                            children.forEach(childIdx => collectDescendants(childIdx));
+                        };
+                        
+                        collectDescendants(replyIndex);
+                        
+                        // Sort in descending order to delete from end to start
+                        indicesToDelete.sort((a, b) => b - a);
+                        
+                        // Delete all collected replies
+                        indicesToDelete.forEach(idx => {
                             comments[commentIndex].replies.splice(idx, 1);
                         });
-                    };
+                        
+                        // Rebuild parentReplyIndex for remaining replies
+                        const oldToNewMap = new Map();
+                        let newIndex = 0;
+                        replies.forEach((r, oldIdx) => {
+                            if (!indicesToDelete.includes(oldIdx)) {
+                                oldToNewMap.set(oldIdx, newIndex++);
+                            }
+                        });
+                        
+                        comments[commentIndex].replies.forEach(r => {
+                            if (r.parentReplyIndex !== null && r.parentReplyIndex !== undefined) {
+                                // Map old parent index to new parent index
+                                const newParentIdx = oldToNewMap.get(r.parentReplyIndex);
+                                r.parentReplyIndex = newParentIdx !== undefined ? newParentIdx : null;
+                            }
+                        });
+                        
+                        transaction.update(postRef, { comments: comments });
+                    });
                     
-                    removeNestedReplies(replyIndex);
-                    comments[commentIndex].replies.splice(replyIndex, 1);
-                    
-                    await postRef.update({ comments: comments });
                     this.showToast('Reply deleted');
                 } catch (error) {
                     console.error('Error deleting reply:', error);
@@ -1441,7 +1490,6 @@
                     return;
                 }
                 
-                // Check if already has conversation
                 const conversationId = this.getConversationId(this.data.currentUser.email, targetEmail);
                 
                 try {
@@ -3031,6 +3079,41 @@
             padding: 1rem;
             border-top: 1px solid rgba(255,255,255,0.1);
         }
+
+        /* FIXED: Profile buttons layout for better visibility */
+        .profile-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            align-items: stretch;
+            width: 100%;
+            max-width: 200px;
+        }
+
+        @media (min-width: 768px) {
+            .profile-actions {
+                flex-direction: row;
+                flex-wrap: wrap;
+                justify-content: flex-end;
+                max-width: none;
+            }
+        }
+
+        .profile-btn {
+            width: 100%;
+            padding: 0.5rem 1rem;
+            border-radius: 9999px;
+            font-weight: 700;
+            font-size: 0.875rem;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        @media (min-width: 768px) {
+            .profile-btn {
+                width: auto;
+            }
+        }
     </style>
 </head>
 <body class="min-h-screen flex flex-col relative">
@@ -3244,20 +3327,20 @@
                             <div class="text-xs text-gray-400 uppercase tracking-wider">Following</div>
                         </div>
                     </div>
-                    <!-- FIXED: Stack buttons vertically on mobile, horizontal on desktop -->
-                    <div class="flex flex-col gap-2">
-                        <button id="notificationBtn" onclick="window.app.navigate('notifications')" class="hidden relative p-3 rounded-full bg-gray-800 hover:bg-gray-700 transition-colors">
+                    <!-- FIXED: Better button layout with profile-actions class -->
+                    <div class="profile-actions">
+                        <button id="notificationBtn" onclick="window.app.navigate('notifications')" class="hidden relative p-3 rounded-full bg-gray-800 hover:bg-gray-700 transition-colors w-12 h-12 flex items-center justify-center">
                             <i class="fa-solid fa-bell text-white text-xl"></i>
                             <span id="notificationBadge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">0</span>
                         </button>
                         <!-- Follow button -->
-                        <button id="followBtn" onclick="window.app.toggleFollow()" class="hidden px-6 py-2 rounded-full bg-white text-black font-bold hover:bg-gray-200 transition-colors">Follow</button>
-                        <!-- Message button - now below follow button -->
-                        <button id="messageBtn" onclick="window.app.startMessage()" class="hidden px-6 py-2 rounded-full bg-blue-600 text-white font-bold hover:bg-blue-500 transition-colors flex items-center justify-center gap-2">
+                        <button id="followBtn" onclick="window.app.toggleFollow()" class="hidden profile-btn bg-white text-black hover:bg-gray-200">Follow</button>
+                        <!-- Message button -->
+                        <button id="messageBtn" onclick="window.app.startMessage()" class="hidden profile-btn bg-blue-600 text-white hover:bg-blue-500 flex items-center justify-center gap-2">
                             <i class="fa-solid fa-message"></i> Message
                         </button>
                         <!-- Suspend button - visible only to admins -->
-                        <button id="suspendBtn" onclick="window.app.showSuspendModal()" class="hidden px-6 py-2 rounded-full bg-red-600 text-white font-bold hover:bg-red-500 transition-colors">
+                        <button id="suspendBtn" onclick="window.app.showSuspendModal()" class="hidden profile-btn bg-red-600 text-white hover:bg-red-500">
                             Suspend User
                         </button>
                     </div>
