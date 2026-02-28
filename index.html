@@ -12,6 +12,7 @@
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-storage-compat.js"></script>
     
     <script>
         // ==========================================
@@ -30,6 +31,7 @@
         firebase.initializeApp(firebaseConfig);
         const db = firebase.firestore();
         const auth = firebase.auth();
+        const storage = firebase.storage();
         
         window.app = {
             data: {
@@ -208,7 +210,6 @@
                 }
                 
                 // Listen to conversations where current user is a participant
-                // Use simple query without ordering to avoid index issues
                 this.data.messagesListener = db.collection('conversations')
                     .where('participants', 'array-contains', this.data.currentUser.email)
                     .onSnapshot((snapshot) => {
@@ -256,25 +257,6 @@
                     } else {
                         badge.classList.add('hidden');
                     }
-                }
-            },
-
-            stopRealtimeListeners() {
-                if (this.data.postsListener) {
-                    this.data.postsListener();
-                    this.data.postsListener = null;
-                }
-                if (this.data.usersListener) {
-                    this.data.usersListener();
-                    this.data.usersListener = null;
-                }
-                if (this.data.notificationsListener) {
-                    this.data.notificationsListener();
-                    this.data.notificationsListener = null;
-                }
-                if (this.data.messagesListener) {
-                    this.data.messagesListener();
-                    this.data.messagesListener = null;
                 }
             },
 
@@ -529,7 +511,7 @@
                         const isHighlighted = highlightCommentIndex === index;
                         const highlightClass = isHighlighted ? 'bg-gray-600/50 ring-2 ring-gray-400/50' : 'bg-gray-800/30';
                         
-                        // Render replies with nesting support - FIXED: Pass the comment index for proper grouping
+                        // Render replies with nesting support
                         const repliesHtml = this.renderRepliesRecursive(
                             c.replies || [], 
                             post.id, 
@@ -537,8 +519,7 @@
                             isAdmin, 
                             '', 
                             0,
-                            highlightReplyIndices,
-                            null // parentReplyIndex is null for top-level replies (direct replies to comment)
+                            highlightReplyIndices
                         );
                         
                         const canDeleteComment = isAdmin || this.data.currentUser?.tag === c.user;
@@ -583,57 +564,58 @@
             },
 
             // FIXED: Recursive function to render nested replies with correct parent-child relationships
-            renderRepliesRecursive(replies, postId, commentIndex, isAdmin, parentPath, depth, highlightReplyIndices, parentReplyIndex) {
+            renderRepliesRecursive(replies, postId, commentIndex, isAdmin, parentPath, depth, highlightReplyIndices) {
                 if (!replies || replies.length === 0) return '';
                 
                 // Sort replies by timestamp (oldest first to maintain thread order)
                 const sortedReplies = [...replies].sort((a, b) => a.timestamp - b.timestamp);
                 
-                // Build a map of replies by their index for quick lookup
-                const replyMap = new Map();
-                sortedReplies.forEach((reply, idx) => {
-                    replyMap.set(idx, { ...reply, originalIndex: idx });
-                });
-                
-                // Build parent-child relationships
-                const childrenMap = new Map(); // parentIndex -> [childIndices]
+                // Build parent-child relationships using reply indices
+                const childrenMap = new Map(); // parentReplyIndex -> [childReplyObjects]
                 const rootReplies = []; // Replies with no parent (direct replies to comment)
                 
                 sortedReplies.forEach((reply, idx) => {
+                    // Store the original index in the sorted array for reference
+                    reply.sortedIndex = idx;
+                    
                     const parentIdx = reply.parentReplyIndex;
                     if (parentIdx === null || parentIdx === undefined) {
                         // This is a direct reply to the comment
-                        rootReplies.push(idx);
+                        rootReplies.push(reply);
                     } else {
                         // This is a reply to another reply
-                        if (!childrenMap.has(parentIdx)) {
-                            childrenMap.set(parentIdx, []);
+                        // Find the parent in our sorted array
+                        const parentReply = sortedReplies[parentIdx];
+                        if (parentReply) {
+                            if (!childrenMap.has(parentIdx)) {
+                                childrenMap.set(parentIdx, []);
+                            }
+                            childrenMap.get(parentIdx).push(reply);
+                        } else {
+                            // Parent not found, treat as root
+                            rootReplies.push(reply);
                         }
-                        childrenMap.get(parentIdx).push(idx);
                     }
                 });
                 
                 // Recursive function to render a reply and its children
-                const renderReply = (replyIdx, currentDepth) => {
-                    const reply = replyMap.get(replyIdx);
-                    if (!reply) return '';
-                    
-                    const replyId = `reply-${postId}-${commentIndex}-${parentPath}${replyIdx}`;
+                const renderReply = (reply, replyIndexInSorted) => {
+                    const replyId = `reply-${postId}-${commentIndex}-${parentPath}${replyIndexInSorted}`;
                     const isExpanded = this.data.expandedReplies.has(replyId);
-                    const childIndices = childrenMap.get(replyIdx) || [];
-                    const hasChildren = childIndices.length > 0;
+                    const childReplies = childrenMap.get(replyIndexInSorted) || [];
+                    const hasChildren = childReplies.length > 0;
                     
                     const canDeleteReply = isAdmin || this.data.currentUser?.tag === reply.user;
-                    const isHighlighted = highlightReplyIndices && highlightReplyIndices.includes(replyIdx);
+                    const isHighlighted = highlightReplyIndices && highlightReplyIndices.includes(replyIndexInSorted);
                     const highlightClass = isHighlighted ? 'bg-gray-600/50 ring-2 ring-gray-400/50' : '';
                     
                     // Render children recursively
                     const childrenHtml = hasChildren && isExpanded ? 
-                        childIndices.map(childIdx => renderReply(childIdx, currentDepth + 1)).join('') : '';
+                        childReplies.map(child => renderReply(child, child.sortedIndex)).join('') : '';
                     
                     const showRepliesBtn = hasChildren ? `
                         <button onclick="window.app.toggleReplies('${replyId}')" class="text-xs text-blue-400 hover:text-blue-300 mt-1 font-medium">
-                            ${isExpanded ? 'Hide Replies ↑' : `Show Replies (${childIndices.length}) ↓`}
+                            ${isExpanded ? 'Hide Replies ↑' : `Show Replies (${childReplies.length}) ↓`}
                         </button>
                     ` : '';
                     
@@ -647,7 +629,7 @@
                             <div class="mt-1">${this.formatCommentText(reply.text)}</div>
                             ${reply.image ? `<img src="${reply.image}" class="mt-2 max-h-32 rounded cursor-pointer hover:opacity-80" onclick="window.app.openImageViewer('${reply.image}', 'Reply Image')">` : ''}
                             <div class="flex gap-2 mt-1">
-                                <button onclick="window.app.showReplyModal('${postId}', ${commentIndex}, ${replyIdx}, '${reply.user}')" 
+                                <button onclick="window.app.showReplyModal('${postId}', ${commentIndex}, ${replyIndexInSorted}, '${reply.user}')" 
                                         class="text-xs text-blue-400 hover:text-blue-300">Reply</button>
                                 ${canDeleteReply ? `
                                 <button onclick="window.app.deleteReply('${postId}', ${commentIndex}, ${reply.timestamp})" 
@@ -661,7 +643,7 @@
                 };
                 
                 // Render all root replies (direct replies to the comment)
-                const rootHtml = rootReplies.map(idx => renderReply(idx, 0)).join('');
+                const rootHtml = rootReplies.map(reply => renderReply(reply, reply.sortedIndex)).join('');
                 
                 if (!rootHtml) return '';
                 
@@ -2120,22 +2102,32 @@
                 if (profileName) profileName.innerText = user.displayName || user.tag || 'User';
                 if (profileTag) profileTag.innerText = '@' + (user.tag || 'unknown');
                 
+                // FIXED: Profile image rendering with better error handling
                 if (profileImage) {
-                    const timestamp = Date.now();
-                    const imgUrl = user.pic && user.pic.trim() !== '' 
-                        ? user.pic + (user.pic.includes('?') ? '&' : '?') + 't=' + timestamp
-                        : `https://ui-avatars.com/api/?name=${encodeURIComponent(user.displayName || user.tag || 'User')}&background=10b981&color=fff&size=128&format=png&font-size=0.4`;
-                    
-                    profileImage.src = imgUrl;
+                    // Clear previous src to prevent showing old image
+                    profileImage.src = '';
                     profileImage.style.opacity = '0';
                     
+                    // Generate avatar URL
+                    const avatarUrl = user.pic && user.pic.trim() !== '' 
+                        ? user.pic 
+                        : `https://ui-avatars.com/api/?name=${encodeURIComponent(user.displayName || user.tag || 'User')}&background=10b981&color=fff&size=128&format=png&font-size=0.4`;
+                    
+                    // Set new src
+                    profileImage.src = avatarUrl;
+                    
+                    // Handle load event
                     profileImage.onload = function() {
                         this.style.opacity = '1';
                         this.style.transition = 'opacity 0.3s ease';
                     };
                     
+                    // Handle error event
                     profileImage.onerror = function() {
-                        this.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(user.displayName || user.tag || 'User')}&background=10b981&color=fff&size=128&format=png`;
+                        // If custom pic fails, fall back to generated avatar
+                        if (user.pic && user.pic.trim() !== '') {
+                            this.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(user.displayName || user.tag || 'User')}&background=10b981&color=fff&size=128&format=png`;
+                        }
                         this.style.opacity = '1';
                     };
                 }
@@ -3626,7 +3618,8 @@
     </div>
 
     <!-- Accept/Reject Modal -->
-    <div id="acceptRejectModal" class="fixed inset-0 z-[100] hidden">
+    
+   <div id="acceptRejectModal" class="fixed inset-0 z-[100] hidden">
         <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" onclick="window.app.closeAcceptRejectModal()"></div>
         <div class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-full max-w-md p-1">
             <div class="bg-gray-900 border border-gray-700 rounded-2xl p-6 shadow-2xl">
